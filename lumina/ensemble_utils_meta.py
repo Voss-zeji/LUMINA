@@ -267,6 +267,13 @@ def _parse_one_token_to_date(token: str) -> Tuple[Optional[date], str]:
     return None, ""
 
 
+# ---- Ensemble: Meta Items — Study Period parsing ----
+# Handles multiple date formats:
+#   "2011-2012"                     → year range
+#   "December 10, 2011 to January 20, 2012" → day precision
+#   "May-December 2010" / "May to December 2010" → month range
+# Also handles blocks separated by ";" or "；"
+# Returns ParsedPeriod(start, end, precision) or None
 def _merge_blocks_to_period(raw: str) -> Optional[ParsedPeriod]:
     """
     将原始 Study Period 字符串解析为 ParsedPeriod 对象：
@@ -561,6 +568,11 @@ def _format_coord_interval(
     return f"{low_s}–{high_s}"
 
 
+# ---- Ensemble: Meta Items — Coordinate ensemble in interval space ----
+# 1. Parse each answer as (low, high) interval
+# 2. Vote in interval space: key = (round(low,4), round(high,4))
+# 3. Tie-break: 1) narrower span, 2) center closer to median
+# 4. Format output: single value or "low–high" range
 def _choose_coordinate(answers: List[Union[str, float, int]]) -> Tuple[str, Dict[int, bool]]:
     """
     对经纬度答案在“区间空间”进行 ensemble：
@@ -805,6 +817,16 @@ def _normalize_single_value(
 # group 内 ensemble 逻辑
 # =====================
 
+# ---- Ensemble: Meta Items — Main ensemble function ----
+# For each (paper_index, question_index, item) group:
+#   1. Normalize all values via _normalize_single_value() per item type
+#   2. Empty-value check: if >50% are empty, output empty
+#   3. Route by item type:
+#      Study Period → _choose_study_period() (weighted vote: day > month > year)
+#      Coordinates   → _choose_coordinate() (interval-space vote, precision merging)
+#      Text (location/specie) → token-normalized vote
+#   4. For coordinates, apply precision_digits rounding to merge close values
+# Returns: ensemble_value, support count, method, n_models
 def _ensemble_group(
     raw_values: List[Any],
     item: str,

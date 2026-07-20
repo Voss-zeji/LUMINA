@@ -222,6 +222,13 @@ def item_equivalence_key(text: str, merge_none_mixed: bool = True) -> str:
 # 数值解析与判定
 # =========================
 
+# ---- Ensemble: Numeric Items — Pure numeric normalization ----
+# Strips units, resolves ± to center value, normalizes ranges to "min-max"
+# Examples:
+#   "12.3 ± 0.4" → "12.3"
+#   "10-20" / "10 to 20" / "10~20"  → "10-20"
+#   "0.01 kgC m-2 yr-1" → "0.01" (unit stripped)
+# Returns None for unparseable values
 def normalize_numeric_string(value: Any) -> Optional[str]:
     """
     将任意数值字符串解析为规范表达：
@@ -270,6 +277,10 @@ def normalize_numeric_string(value: Any) -> Optional[str]:
 
     return None
 
+# ---- Ensemble: Numeric Items — Numeric + unit normalization ----
+# Extends normalize_numeric_string by also extracting and normalizing unit tokens
+# Example: "0.01 kgC m-2 yr-1" → "0.01 c kgc m-2 yr-1"
+# Units are lowercased, deduplicated, sorted → ensures "kg m-2" == "m-2 kg"
 def normalize_numeric_with_unit(value: Any) -> Optional[str]:
     """
     在 normalize_numeric_string 的基础上，同时考虑单位信息，返回“数值 + 单位”的标准化字符串。
@@ -477,6 +488,14 @@ def ensemble_numeric_dataframe_all_data(
 
     return out
 
+# ---- Ensemble: Numeric Items — Main ensemble function ----
+# Two modes:
+#   1. Default mode (per-item voting):
+#      Group by (paper, question, item) → vote → winner by count+confidence
+#   2. Decimal-majority mode (cross-item by numeric value):
+#      When ≥50% of values have ≥2 decimal places, group by (paper, question, normalized_value)
+#      across items, then use location-specie logic to extract representative item description
+# Both modes output: paper_index, question_index, item, ensemble_value, vote_count, models
 def ensemble_numeric_dataframe(
     df: pd.DataFrame,
     theme: Optional[str] = None,

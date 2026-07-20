@@ -12,6 +12,15 @@ from .common import ensure_directory_exists
 _AQUA_Q1_ITEMS = ["Study_location", "Study_location_detail", "Study_period", "Latitude", "Longitude"]
 
 
+# ---- Stage 5: Ensemble — Route to meta or numeric ensemble by question type ----
+# Meta items (Q1 both domains, Q2 aqua):
+#   → ensemble_utils_meta.ensemble_dataframe()
+#   → Text normalization → voting → most common value wins
+#   → Empty-value majority (>50%) → output empty/null
+# Numeric items (Q3 aqua, Q2-4 wildfire):
+#   → ensemble_utils_value.ensemble_numeric_dataframe()
+#   → Numeric normalization → item equivalence → voting → most common wins
+#   → Decimal-majority mode: cross-item aggregation by numeric value
 def _ensemble_subset(domain: str, question_index: int, subset: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     result = pd.DataFrame()
     detail = pd.DataFrame()
@@ -67,6 +76,17 @@ def _run_variant(domain: str, question_index: int, df: pd.DataFrame, out_dir: Pa
     print(f"saved ensemble {domain} Q{question_index:02d} {label} ({len(result)} rows)")
 
 
+# ---- Stage 5: Ensemble — Main entry point for a domain ----
+# For each question:
+#   1. Read the composite Excel (with cross_score merged from cross-validation)
+#   2. Run 4 variant ensembles:
+#      - 00_full:      no filtering (all model answers)
+#      - MiniCross02:  cross_score ≥ 2
+#      - MiniCross04:  cross_score ≥ 4
+#      - MiniCross05:  cross_score ≥ 5
+#   3. Each variant produces 2 Excel files:
+#      - Ensemble_Result:     final consensus values
+#      - All-Standard-Answers: all normalized candidates with frequency counts
 def run_ensemble_for_domain(domain: str, domain_cfg: dict, run_cfg: dict) -> None:
     ensure_directory_exists(domain_cfg["ensemble_dir"])
     questions = prompts.questions_for_domain(domain)

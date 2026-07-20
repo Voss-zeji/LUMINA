@@ -57,6 +57,19 @@ def run(domain: str, stage: str, config) -> None:
         ensemble.run_ensemble_for_domain(domain, domain_cfg, config.RUN)
 
 
+# ---- LUMINA Pipeline CLI ----
+# Usage:
+#   python run_pipeline.py --domain {aqua,wildfire} --stage {prepare|examiner|composite|embeddings|cross|ensemble|all}
+#   python run_pipeline.py --config path/to/config.py --domain wildfire --stage all
+#
+# Stages:
+#   0. prepare    → PDF→MD conversion, refs-truncation, token audit
+#   1. examiner   → Multi-LLM JSON extraction per paper per question
+#   2. composite  → Aggregate all model outputs into Excel
+#   3. embeddings → Chunk + embed markdown, cache as .npy
+#   4. cross      → Cross-validation: verify evidence via embedding retrieval
+#   5. ensemble   → Consensus voting with cross_score threshold filtering
+#   all           → Run stages 0→5 in sequence
 def main() -> None:
     parser = argparse.ArgumentParser(description="LUMINA aqua/wildfire pipeline")
     parser.add_argument("--config", default="config.py", help="Path to a filled config.py (default: ./config.py)")

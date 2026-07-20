@@ -24,6 +24,10 @@ from .utils import model_name, sleep_for_rate_limit
 _INVALID_EVIDENCE = {"nan", "na", "n/a", "none", "null", ""}
 
 
+# ---- Stage 3: Embeddings — Generate and cache chunk vectors for one domain ----
+# 1. Split each paper's markdown into chunks (chunk_size=2048, overlap=20%)
+# 2. Generate embeddings via the configured embedding model
+# 3. Cache as .npy files for reuse across cross-validation runs
 def save_embeddings(file_path: str, array: np.ndarray) -> None:
     ensure_directory_exists(Path(file_path).parent)
     np.save(file_path, array)
@@ -68,6 +72,16 @@ def _chunks_for_paper(markdown_path: str, run_cfg: dict) -> list[str]:
     return _splitter(run_cfg).split_text(turnIntoPureText(markdown_path))
 
 
+# ---- Stage 4: Cross-Validation — Main loop for one domain ----
+# For each question × each row in composite × each evidence:
+#   1. Compute embedding of the evidence text
+#   2. Cosine similarity against all chunk embeddings → find the best chunk
+#   3. Extend context by ±text_extension chunks (default: ±1, so 3 chunks total)
+#   4. For each OTHER LLM (not the one that produced the evidence):
+#      a. Build the checker_requery prompt with context + evidence + key_topic
+#      b. Call llm_requery() → returns {"existing_flag": 0|1, "direct_quote": "..."}
+#      c. Save per-verification CSV with metadata (similarity, token, time)
+#   5. aggregate_cross_scores() merges all verification votes back into composite
 def cross_validate_domain(
     domain: str,
     domain_cfg: dict,
@@ -164,6 +178,11 @@ def cross_validate_domain(
                 sleep_for_rate_limit(llm, low_limit_seconds=5, high_limit_seconds=0.1)
 
 
+# ---- Stage 4: Cross-Validation — Aggregate verification scores ----
+# 1. Collect all cross-validation CSV rows
+# 2. Pivot to get a flag per verifying model (existing_flag=1 → flag=1)
+# 3. Sum flags across models → cross_score (how many verifying models confirm the evidence)
+# 4. Merge cross_score back into the composite Excel for ensemble filtering
 def aggregate_cross_scores(domain_cfg: dict, selected_model_names: list[str]) -> pd.DataFrame:
     rows = []
     for csv_file in Path(domain_cfg["crosser_dir"]).glob("Paper_*/Q*/*.csv"):

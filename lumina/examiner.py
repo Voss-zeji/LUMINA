@@ -18,6 +18,12 @@ from .llm import single_chat
 from .utils import model_name, sleep_for_rate_limit
 
 
+# ---- Stage 1: Examiner — Single LLM call for one paper × one question ----
+# Constructs the 3-message prompt structure:
+#   msg[0] = system role + domain context
+#   msg[1] = output format instruction + paper markdown content
+#   msg[2] = domain-specific question (JSON schema)
+# Returns (response_text, total_tokens)
 def run_llm_prompt_mode(
     llm: dict,
     llm_settings: dict,
@@ -51,11 +57,22 @@ def run_llm_prompt_mode(
         )
 
 
+# Parse the LLM's JSON response into a DataFrame
+# Uses refineJsonString (json5 parser) to handle malformed JSON
+# Each top-level key becomes an "item" column, sub-keys become columns
 def _df_from_result(result: str) -> pd.DataFrame:
     parsed = refineJsonString(result)
     return pd.DataFrame([{"item": k, **v} for k, v in parsed.items()])
 
 
+# ---- Stage 1: Examiner — Main loop for a domain ----
+# For each paper × each LLM × each question:
+#   1. Skip if output CSV already exists (resume-safe)
+#   2. Call run_llm_prompt_mode() with the truncated markdown
+#   3. Parse JSON response → DataFrame
+#   4. On parse failure: save raw text to _invalid.txt, use placeholder
+#   5. Sleep for rate limiting (59s for low-limit, 1s for high-limit)
+#   6. Save CSV with metadata columns (paper_index, model, tokens, time, question_index)
 def run_examiner_for_domain(domain: str, domain_cfg: dict, llm_dicts: dict, llm_settings: dict, run_cfg: dict) -> None:
     from pathlib import Path
 

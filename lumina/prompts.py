@@ -1,14 +1,31 @@
 # -*- coding: utf-8 -*-
 """All prompts for LUMINA aqua + wildfire extraction and cross-validation.
 
-Only aqua and wildfire prompts are kept here. No Nature/NC prompts.
+Prompt structure (Stage 1: Examiner):
+  Each LLM call sends 3 messages in sequence:
+    1. System prompt    → message_system_v2 (role + domain context)
+    2. User instruction → message_system_v2_output (output format + paper content)
+    3. User question    → domain-specific question (JSON schema + constraints)
+
+Prompt structure (Stage 4: Cross-Validation):
+  Each LLM call sends 2 messages:
+    1. System prompt    → message_system_ragQuery (evidence verifier role)
+    2. User instruction → checker_requery / checker_requeryFull (context + answer + rules)
 """
 
+# ---- Stage 1: Examiner — System Prompt (消息 1) ----
+# Sets the LLM's role as a domain expert scientist reading the paper
+# {domain} is replaced with the domain_knowledge string from config
 message_system_v2 = """
 You are skilled in Chinese/English paper reading; You are also a scientist and expert in {domain}. 
 You read through the whole paper (from the beginning to the end);
 provide the best answers (may include multiple items) you can find to the question that I ask.
 """
+
+# ---- Stage 1: Examiner — Output Instruction + Paper Content (消息 2) ----
+# Instructs the LLM to output JSON with value, evidence, and confidence_lv
+# {content} is replaced with the full markdown text (truncated before References)
+# Forces JSON output via response_format={"type": "json_object"} in the API call
 
 message_system_v2_output = """
 Read the question, analyze step by step, provide your answer and your confidence (0% to 100%) to this answer. 
@@ -21,11 +38,20 @@ Note:
 Please read this markdown content:\n{content}
 """
 
+# ---- Stage 4: Cross-Validation — System Prompt (消息 1) ----
+# Positions the LLM as an evidence verifier, not a strict fact-checker
+# The task is to confirm whether a piece of evidence exists in the retrieved context
 message_system_ragQuery = """
 You are a scientific evidence verifier rather than a strict semantic fact-checker. 
 You are going to check:
 If the provided sentence, paragraph, or table closely aligns with the most relevant texts measured by vectorizations, return Yes if so, return No if not.
 """
+
+# ---- Stage 4: Cross-Validation — Verification Task (消息 2) ----
+# {context}  = the retrieved chunk(s) from the original paper
+# {key_topic} = the item name (e.g. "Study_location", "Forest_smoldering")
+# {answer}    = the evidence text from one model's examiner output
+# The LLM must return JSON: {"existing_flag": 0|1, "direct_quote": "..."}
 
 checker_requery = """
 Rethink before you do the checker and then proceed with the following:
@@ -103,9 +129,11 @@ Example:
 """
 
 # -------------------------
-# Aqua prompts
+# Aqua domain prompts (3 questions)
 # -------------------------
 
+# Q1: Study metadata — location, period, coordinates
+# Extracted as meta items (text), ensembled via ensemble_utils_meta
 aqua_question_A_meta = """
 What are the study locations and study period in this study? Answer the above question and provide direct evidence.
 Note: 
@@ -151,6 +179,8 @@ The answer should be provided exclusively in JSON format, following the example 
 }
 """
 
+# Q2: Cultured species — constrained choice (fish/shrimp/crab/mixed/others)
+# Extracted as meta item (text), ensembled via ensemble_utils_meta
 aqua_question_B_experiment = """
 Which of the following species were cultured in the aquaculture ponds where this study measured CH4 flux? The value should be chosen only from the following selections:
 A [fish] B [shrimp] C [crab] D [mixed] E [others].
@@ -173,6 +203,8 @@ The answer should be provided exclusively in JSON format, following the example 
 }
 """
 
+# Q3: Methane flux values — per-test extraction, may have multiple items
+# Extracted as numeric items, ensembled via ensemble_utils_value
 aqua_question_C_flux = """
 What are the methane flux values for each of the comparative tests (e.g. different aquaculture ponds, experimental treatments, etc) measured in this study ? 
 Answer the above question and provide direct evidence.
@@ -199,9 +231,11 @@ The answer should be provided exclusively in JSON format and may include multipl
 """
 
 # -------------------------
-# Wildfire prompts
+# Wildfire domain prompts (4 questions)
 # -------------------------
 
+# Q1: Study metadata — location, period
+# Extracted as meta items, ensembled via ensemble_utils_meta
 wildfire_question_A_meta = """
 What are the study locations and study period in this study? 
 Answer the above question and provide direct evidence.
@@ -230,6 +264,10 @@ The answer should be provided exclusively in JSON format, following the example 
 }
 """
 
+# Q2-4: Emission factors — parameterized by gas type (co2/ch4/n2o)
+# Each fuel × combustion type is a separate item (e.g. Forest_smoldering)
+# Extracted as numeric items, ensembled via ensemble_utils_value
+# {emission} is replaced by the gas name via wildfire_question_EFQuery()
 wildfire_question_B_ef_details = """
 What are the emission factors for {emission} associated with various types of fuels? Answer the above question and provide direct evidence. 
 
