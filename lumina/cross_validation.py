@@ -36,7 +36,10 @@ def save_embeddings(file_path: str, array: np.ndarray) -> None:
 def load_embeddings(file_path: str):
     if not os.path.exists(file_path):
         return None
-    return np.load(file_path)
+    try:
+        return np.load(file_path)
+    except (EOFError, OSError, ValueError):
+        return None
 
 
 def embedding_file(domain_cfg: dict, paper_prefix: str, chunk_size: int, overlap_percent: int) -> str:
@@ -54,15 +57,37 @@ def _splitter(run_cfg: dict) -> MarkdownTextSplitter:
     )
 
 
+def independent_verifiers(llm_dicts: dict, selected_model_names: list[str], input_model: str) -> list[dict]:
+    return [
+        llm
+        for llm in llm_dicts.values()
+        if model_name(llm) in selected_model_names and model_name(llm) != input_model
+    ]
+
+
+def _successful_cross_output(output_file: Path) -> bool:
+    try:
+        result = pd.read_csv(output_file, sep="\t")
+    except Exception:
+        return False
+    if result.empty or "existing_flag" not in result.columns:
+        return False
+    flags = pd.to_numeric(result["existing_flag"], errors="coerce")
+    return flags.isin([0, 1]).all()
+
+
 def generate_embeddings_for_domain(domain_cfg: dict, embedding_model: dict, llm_settings: dict, run_cfg: dict) -> None:
     splitter = _splitter(run_cfg)
     for raw_markdown in sorted(Path(domain_cfg["markdown_dir"]).glob("*.md")):
         before_refs = turnIntoPureText(raw_markdown)
         paper_prefix = paper_prefix_from_path(raw_markdown)
         out_file = embedding_file(domain_cfg, paper_prefix, run_cfg["chunk_size"], run_cfg["overlap_percent"])
-        if os.path.exists(out_file):
-            continue
         chunks = splitter.split_text(before_refs)
+        if os.path.exists(out_file):
+            cached = load_embeddings(out_file)
+            if cached is not None and cached.ndim == 2 and len(cached) == len(chunks):
+                continue
+            print(f"rebuilding stale embedding cache: {out_file}")
         vectors = np.array([embedding_response(chunk, embedding_model, llm_settings) for chunk in chunks])
         save_embeddings(out_file, vectors)
         print(f"embedded Paper {paper_prefix} ({len(chunks)} chunks)")
@@ -134,34 +159,39 @@ def cross_validate_domain(
             crosser_paper_path = Path(domain_cfg["crosser_dir"]) / f"Paper_{paper_prefix}" / f"Q{question_index:02d}"
             ensure_directory_exists(crosser_paper_path)
 
-            for llm in llm_dicts.values():
+            for llm in independent_verifiers(llm_dicts, selected_model_names, input_model):
                 output_model = model_name(llm)
-                if output_model not in selected_model_names:
-                    continue
                 output_file = crosser_paper_path / f"ItemRawIndex_{str(all_index).zfill(5)}==Input_{input_model}==Output_{output_model}.csv"
-                if output_file.exists():
+                if output_file.exists() and _successful_cross_output(output_file):
                     continue
+                output_file.unlink(missing_ok=True)
 
                 time1 = time.time()
-                result, token = llm_requery(
-                    llm,
-                    llm_settings,
-                    prompts.message_system_ragQuery.strip(),
-                    prompts.checker_requery.format(
-                        answer=evidence,
-                        context=optimal_context,
-                        key_topic=row.get("item", ""),
-                    ).strip(),
-                    temperature=run_cfg["temperature"],
-                )
+                error = None
+                try:
+                    result, token = llm_requery(
+                        llm,
+                        llm_settings,
+                        prompts.message_system_ragQuery.strip(),
+                        prompts.checker_requery.format(
+                            answer=evidence,
+                            context=optimal_context,
+                            key_topic=row.get("item", ""),
+                        ).strip(),
+                        temperature=run_cfg["temperature"],
+                    )
+                except Exception as exc:
+                    result, token, error = None, 0, f"LLM_ERROR: {exc}"
                 time2 = time.time()
 
+                parse_failed = False
                 try:
                     result_df = pd.DataFrame([refineJsonString(result)])
                 except Exception:
+                    parse_failed = True
                     raw_path = str(output_file).replace(".csv", "_invalid.txt")
                     with open(raw_path, "w", encoding="utf-8") as f:
-                        f.write("" if result is None else str(result))
+                        f.write(error or ("" if result is None else str(result)))
                     fallback = error_cross_result() if result is None else invalid_cross_result()
                     result_df = pd.DataFrame([fallback])
                     token = 0
@@ -175,6 +205,8 @@ def cross_validate_domain(
                 result_df["output_model"] = output_model
                 result_df["max_similarities"] = float(np.nanmax(similarities))
                 result_df.to_csv(output_file, sep="\t", index=False)
+                if not parse_failed:
+                    Path(str(output_file).replace(".csv", "_invalid.txt")).unlink(missing_ok=True)
                 sleep_for_rate_limit(llm, low_limit_seconds=5, high_limit_seconds=0.1)
 
 
@@ -194,6 +226,10 @@ def aggregate_cross_scores(domain_cfg: dict, selected_model_names: list[str]) ->
         return pd.DataFrame()
 
     all_votes = pd.concat(rows, ignore_index=True)
+    all_votes = all_votes[all_votes["input_model"] != all_votes["output_model"]]
+    all_votes = all_votes[pd.to_numeric(all_votes["existing_flag"], errors="coerce").isin([0, 1])]
+    if all_votes.empty:
+        return pd.DataFrame()
     all_votes["flag"] = (pd.to_numeric(all_votes["existing_flag"], errors="coerce") == 1).astype(int)
     pivot = all_votes.pivot_table(
         index=["paper_index", "question_index", "item_raw_index", "input_model"],

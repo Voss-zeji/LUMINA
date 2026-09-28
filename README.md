@@ -13,7 +13,7 @@ We piloted LUMINA in two distinct tasks—water (aquaculture) and fire—to cons
 | 2 | `composite` | Aggregate all model outputs into per-question Excel files |
 | 3 | `embeddings` | Chunk markdown and generate vector embeddings (cached as `.npy`) |
 | 4 | `cross` | Cross-validation: verify evidence existence via embedding retrieval |
-| 5 | `ensemble` | Consensus voting with cross-score threshold filtering (`full`, `≥2`, `≥4`, `≥5`) |
+| 5 | `ensemble` | Consensus voting with `full` and configured, reachable cross-score thresholds |
 
 ```
 PDFs ──→ [Prepare] ──→ Markdown ──→ [Examiner] ──→ Per-model CSV
@@ -24,7 +24,7 @@ PDFs ──→ [Prepare] ──→ Markdown ──→ [Examiner] ──→ Per-m
                                                                 ↓
                                                       [Cross-Validation] ──→ Cross-scores
                                                                 ↓
-              [Ensemble] ← cross_score ≥ {2,4,5} filtering ──→ Final consensus
+              [Ensemble] ← full + configured cross_score filtering ──→ Final consensus
 ```
 
 ### Stage 0 — Prepare
@@ -33,7 +33,7 @@ PDFs are converted to Markdown via [marker](https://github.com/VikParuchuri/mark
 
 ### Stage 1 — Examiner
 
-Each paper is sent to multiple LLMs in parallel, with each LLM answering a set of domain-specific questions. The LLM receives a 3-message prompt: system role (domain expert) → output instruction (JSON schema) → the specific question. Output is forced as JSON via `response_format={"type": "json_object"}`, containing `value`, `evidence` (direct quote), and `confidence_lv`. Parse failures are salvaged to `_invalid.txt`.
+Each paper is sent to multiple LLMs, with each LLM answering a set of domain-specific questions. The LLM receives a 3-message prompt: system role (domain expert) → output instruction (JSON schema) → the specific question. Providers with `supports_json_mode=True` receive `response_format={"type": "json_object"}`; others rely on the prompt plus the existing JSON5 parser. Request and parse failures are retained in `_invalid.txt` and are retried on the next run rather than treated as completed CSVs.
 
 ### Stage 2 — Composite
 
@@ -49,12 +49,14 @@ For each evidence item produced in Stage 1, the evidence text is embedded and ma
 
 ### Stage 5 — Ensemble
 
-The composite data is filtered by `cross_score` thresholds (`full`, `≥2`, `≥4`, `≥5`) to produce four ensemble variants. Within each variant, answers are grouped by paper and voted on:
+The composite data is filtered by the unfiltered `full` set and the configured `min_cross_scores` values. Each configured threshold must be between 1 and the number of independent verifiers (`selected models − 1`); LUMINA stops before a cross or ensemble run when the configuration violates that rule. Within each variant, answers are grouped by paper and voted on:
 
 - **Meta items** (location, period, coordinates, species): text normalization → majority voting. Empty values win if they exceed 50%. Coordinates are merged by precision rounding (2 decimal places). Study periods support multiple date formats (`YYYY`, `Month YYYY`, `Month DD YYYY`, `May-December 2010`).
 - **Numeric items** (flux values, emission factors): value normalization (stripping units, resolving `±` to center, range normalization) → voting by count, then confidence. When ≥50% of values have ≥2 decimal places, a cross-item aggregation mode groups answers by numeric value rather than by item name.
 
 Each variant outputs two Excel files: a consensus result and an all-standardized-answers detail.
+
+Cross-validation never lets the source model verify its own evidence. Legacy self-verification files are also ignored when scores are re-aggregated.
 
 ## Questions Per Domain
 
@@ -86,6 +88,8 @@ pip install -r requirements.txt
 # Configure
 cp config.example.py config.py
 # → Edit config.py with your API keys, endpoints, and local paths
+# → Set supports_json_mode=False for providers that reject response_format
+# → Keep every min_cross_scores value ≤ selected-model-count - 1
 
 # Run full pipeline
 python run_pipeline.py --domain aqua --stage all
@@ -121,3 +125,5 @@ github-codes/
     ├── common.py
     └── utils.py
 ```
+
+For the scientific workflow, quality gates, and the staged Agent architecture, see [LUMINA_AGENTIC_WORKFLOW.md](LUMINA_AGENTIC_WORKFLOW.md).

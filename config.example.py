@@ -20,8 +20,8 @@ FULL_LLM_POOL = {
 }
 
 LLM_SETTINGS = {
-    "provider_1": {"key": "", "url": ""},
-    "provider_2": {"key": "", "url": ""},
+    "provider_1": {"key": "", "url": "", "supports_json_mode": True},
+    "provider_2": {"key": "", "url": "", "supports_json_mode": True},
     "embedding_provider": {"key": "", "url": ""},
 }
 
@@ -41,7 +41,7 @@ RUN = {
     "chunk_size": 2048,
     "overlap_percent": 20,
     "text_extension": 1,
-    "min_cross_scores": [2, 4, 5],
+    "min_cross_scores": [1],
 }
 
 DOMAINS = {

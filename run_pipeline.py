@@ -21,6 +21,18 @@ def build_llm_dicts(config) -> dict:
     return {k: config.FULL_LLM_POOL[k] for k in config.SELECTED_KEYS if k in config.FULL_LLM_POOL}
 
 
+def validate_min_cross_scores(selected_model_names: list[str], run_cfg: dict) -> None:
+    """Reject thresholds that no independent verifier set can reach."""
+    max_score = max(len(set(selected_model_names)) - 1, 0)
+    scores = run_cfg.get("min_cross_scores", [])
+    invalid = [score for score in scores if not isinstance(score, int) or not 1 <= score <= max_score]
+    if invalid:
+        raise SystemExit(
+            f"min_cross_scores must be integers from 1 to {max_score} (at most {max_score} independent verifiers); "
+            f"invalid: {invalid}"
+        )
+
+
 def run(domain: str, stage: str, config) -> None:
     from lumina import composite, cross_validation, ensemble, examiner, preparation
     from lumina.utils import model_name
@@ -31,6 +43,8 @@ def run(domain: str, stage: str, config) -> None:
     llm_dicts = build_llm_dicts(config)
     selected_model_names = [model_name(llm) for llm in llm_dicts.values()]
     n_questions = len(domain_cfg["questions"])
+    if stage in ("cross", "ensemble", "all"):
+        validate_min_cross_scores(selected_model_names, config.RUN)
 
     if stage in ("prepare", "all"):
         mds = preparation.ensure_markdowns(domain_cfg)

@@ -1,23 +1,24 @@
 from __future__ import annotations
 
-import logging
-
 import requests
 from openai import OpenAI
 
 
 def single_chat(llm: dict, llm_settings: dict, message_input: list[dict], temperature=0.01):
+    provider = llm_settings[llm["source"]]
     client = OpenAI(
-        api_key=llm_settings[llm["source"]]["key"],
-        base_url=llm_settings[llm["source"]]["url"],
+        api_key=provider["key"],
+        base_url=provider["url"],
     )
-    completion = client.chat.completions.create(
-        model=llm["model"],
-        messages=message_input,
-        temperature=temperature,
-        stream=False,
-        response_format={"type": "json_object"},
-    )
+    request = {
+        "model": llm["model"],
+        "messages": message_input,
+        "temperature": temperature,
+        "stream": False,
+    }
+    if provider.get("supports_json_mode", True):
+        request["response_format"] = {"type": "json_object"}
+    completion = client.chat.completions.create(**request)
     return completion.choices[0].message.content, completion.usage.total_tokens
 
 
@@ -37,9 +38,4 @@ def llm_requery(llm: dict, llm_settings: dict, system_settings: str, prompt_rag:
         {"role": "system", "content": system_settings},
         {"role": "user", "content": prompt_rag},
     ]
-    name = llm["model"].split("/")[-1]
-    try:
-        return single_chat(llm, llm_settings, messages, temperature=temperature)
-    except Exception as e:
-        logging.error("%s | Error during LLM execution: %s", name, e)
-        return None, 0
+    return single_chat(llm, llm_settings, messages, temperature=temperature)

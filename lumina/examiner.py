@@ -7,7 +7,6 @@ import pandas as pd
 
 from . import prompts
 from .common import (
-    invalid_examiner_result,
     paper_prefix_from_path,
     refineJsonString,
     save_dataframe,
@@ -40,21 +39,7 @@ def run_llm_prompt_mode(
         {"role": "user", "content": prompts.message_system_v2_output.format(content=text)},
         {"role": "user", "content": question.strip("\n")},
     ]
-    try:
-        return single_chat(llm, llm_settings, messages, temperature=temperature)
-    except Exception:
-        return (
-            """
-        {
-          "ilegal": {
-            "value": null,
-            "description": null,
-            "confidence_lv": null
-          }
-        }
-        """,
-            -1,
-        )
+    return single_chat(llm, llm_settings, messages, temperature=temperature)
 
 
 # Parse the LLM's JSON response into a DataFrame
@@ -65,12 +50,24 @@ def _df_from_result(result: str) -> pd.DataFrame:
     return pd.DataFrame([{"item": k, **v} for k, v in parsed.items()])
 
 
+def _successful_output(output_file: str) -> bool:
+    try:
+        result = pd.read_csv(output_file, sep="\t")
+    except Exception:
+        return False
+    if result.empty or "item" not in result.columns:
+        return False
+    if result["item"].astype(str).str.lower().isin({"ilegal", "invalid_syntax"}).any():
+        return False
+    return "total_tokens" in result.columns and (pd.to_numeric(result["total_tokens"], errors="coerce") >= 0).all()
+
+
 # ---- Stage 1: Examiner — Main loop for a domain ----
 # For each paper × each LLM × each question:
 #   1. Skip if output CSV already exists (resume-safe)
 #   2. Call run_llm_prompt_mode() with the truncated markdown
 #   3. Parse JSON response → DataFrame
-#   4. On parse failure: save raw text to _invalid.txt, use placeholder
+#   4. On request or parse failure: save raw text to _invalid.txt and leave the task resumable
 #   5. Sleep for rate limiting (59s for low-limit, 1s for high-limit)
 #   6. Save CSV with metadata columns (paper_index, model, tokens, time, question_index)
 def run_examiner_for_domain(domain: str, domain_cfg: dict, llm_dicts: dict, llm_settings: dict, run_cfg: dict) -> None:
@@ -86,29 +83,37 @@ def run_examiner_for_domain(domain: str, domain_cfg: dict, llm_dicts: dict, llm_
         for llm_key, llm in llm_dicts.items():
             for q_idx, question in enumerate(questions, start=1):
                 output_file = save_dataframe(llm, paper_prefix, q_idx, domain_cfg["examiner_output"], run_cfg["round_index"])
-                if os.path.exists(output_file):
+                if os.path.exists(output_file) and _successful_output(output_file):
                     print(f"Paper {paper_prefix} | {llm_key} - Question {q_idx} ... exists")
                     continue
+                if os.path.exists(output_file):
+                    os.remove(output_file)
 
                 time1 = time.time()
-                result, token = run_llm_prompt_mode(
-                    llm,
-                    llm_settings,
-                    before_refs,
-                    paper_prefix,
-                    q_idx,
-                    question,
-                    domain_cfg["domain_knowledge"],
-                    round_index=run_cfg["round_index"],
-                    temperature=run_cfg["temperature"],
-                )
+                try:
+                    result, token = run_llm_prompt_mode(
+                        llm,
+                        llm_settings,
+                        before_refs,
+                        paper_prefix,
+                        q_idx,
+                        question,
+                        domain_cfg["domain_knowledge"],
+                        round_index=run_cfg["round_index"],
+                        temperature=run_cfg["temperature"],
+                    )
+                except Exception as exc:
+                    write_invalid_text(output_file, f"LLM_ERROR: {exc}")
+                    print(f"Paper {paper_prefix} | {llm_key} - Question {q_idx} ... failed: {exc}")
+                    continue
                 time2 = time.time()
 
                 try:
                     result_df = _df_from_result(result)
-                except Exception:
+                except Exception as exc:
                     write_invalid_text(output_file, result)
-                    result_df = pd.DataFrame([{"item": k, **v} for k, v in invalid_examiner_result().items()])
+                    print(f"Paper {paper_prefix} | {llm_key} - Question {q_idx} ... invalid response: {exc}")
+                    continue
 
                 result_df["paper_index"] = paper_prefix
                 result_df["total_tokens"] = token
@@ -120,5 +125,6 @@ def run_examiner_for_domain(domain: str, domain_cfg: dict, llm_dicts: dict, llm_
                     result_df["emission_type"] = emission_type
 
                 result_df.to_csv(output_file, sep="\t", index=False)
+                Path(str(output_file).replace(".csv", "_invalid.txt")).unlink(missing_ok=True)
                 sleep_for_rate_limit(llm)
                 print(f"Paper {paper_prefix} | {llm_key} - Question {q_idx} ... finished")
