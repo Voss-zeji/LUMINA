@@ -12,12 +12,14 @@ ensemble_utils_value.py
     仅对“数值部分”做规范化（去括号、统一范围写法、± 取中心值、转换为统一字符串），
     不保留单位。适合用来判断“数值是否相同”，以及识别无意义数值（如 999999、-1 等）。
 
-- normalize_numeric_with_unit(value):
-    在 normalize_numeric_string 的基础上，同时提取单位信息，将“数值 + 单位”
-    组合成标准化字符串。例如:
-        "0.01 kgC m-2 yr-1" -> "0.01 c kgc m-2 yr-1"
-        "0.01 m"           -> "0.01 m"
-    对于完全没有单位的情况，返回与 normalize_numeric_string 一致的结果。
+- normalize_numeric_with_unit(value) / normalize_explicit_unit(unit):
+    单位处理分两条路径：
+    * 内联单位（value 字符串里自带的单位，unit 列缺失时的回退）：提取 token 后
+      小写去重排序，沿用既有行为。例 "0.01 kgC m-2 yr-1" -> "0.01 kgc m-2 yr-1"。
+    * 独立 unit 字段（prompts.py 的 'unit' 列，优先）：按分隔符切 token 后排序，
+      保留大小写与 ¯/²/¹/μ/°/% 等排版字符。SI 前缀大小写敏感，
+      因此 "mW" 与 "MW" 不会被合并。
+    两条路径都不做物理单位换算：不同显式单位必然落在不同票箱。
 
 - ensemble_numeric_dataframe_all_data(df, ...):
     对原始模型输出按 (paper_index, question_index, item, normalized_value) 做标准化与聚合，
@@ -61,6 +63,7 @@ ensemble_utils_value.py
 from __future__ import annotations
 from typing import Optional, Dict, Any, List, Tuple, Iterable
 import re
+import warnings
 import pandas as pd
 
 # 可选依赖：从 ensemble_utils_meta 复用 location-specie 集成功能
@@ -227,8 +230,25 @@ def item_equivalence_key(text: str, merge_none_mixed: bool = True) -> str:
 # Examples:
 #   "12.3 ± 0.4" → "12.3"
 #   "10-20" / "10 to 20" / "10~20"  → "10-20"
-#   "0.01 kgC m-2 yr-1" → "0.01" (unit stripped)
+#   "1e-3" → "0.001"（科学计数法不是范围）
+#   "0.01 kgC m-2 yr-1" → "0.01" (unit stripped, 单位指数不参与解析)
 # Returns None for unparseable values
+
+# 单个数值的完整写法：可选符号 + 数字（含千分位/小数）+ 可选科学计数法指数
+_NUMBER = r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?"
+
+# 范围：两个端点之间只允许一个范围连字符，且端点后不能再跟数字/指数符号。
+# 这样 "10-20" 是范围，而 "1e-3"、"0.01 kgC m-2 yr-1" 里的 "-" 不会被读成范围。
+_RANGE_RE = re.compile(rf"(?<![0-9.])({_NUMBER})\s*-\s*({_NUMBER})(?![0-9.eE])")
+_FIRST_NUMBER_RE = re.compile(_NUMBER)
+
+
+def _fmt_number(x: float) -> str:
+    """整数去掉 .0，与既有单值/范围输出格式保持一致。"""
+    xi = int(x)
+    return str(xi) if abs(x - xi) < 1e-12 else str(x)
+
+
 def normalize_numeric_string(value: Any) -> Optional[str]:
     """
     将任意数值字符串解析为规范表达：
@@ -237,11 +257,22 @@ def normalize_numeric_string(value: Any) -> Optional[str]:
     - 范围：'x–y'/'x-y'/'x to y'/'x ~ y' -> 'min-max'
     - 自动去单位（仅保留数值/区间）；解析失败 -> None
     """
+    return _parse_numeric_prefix(value)[0]
+
+
+def _parse_numeric_prefix(value: Any) -> Tuple[Optional[str], str]:
+    """
+    解析数值部分，返回 (规范数值, 去掉数值表达式后剩余的文本)。
+
+    剩余文本只可能来自数值之外的部分，因此会作为内联单位使用；
+    这样范围词 "to"/"~" 与科学计数法指数 "e-3" 不会被误当成单位，
+    "10-20"/"10 to 20"/"10~20" 与 "1e-3" 都稳定落入同一个票箱。
+    """
     if value is None:
-        return None
+        return None, ""
     s = str(value).strip()
     if _is_invalid_str(s):
-        return None
+        return None, ""
 
     # 去括号
     if s.startswith("(") and s.endswith(")"):
@@ -253,29 +284,25 @@ def normalize_numeric_string(value: Any) -> Optional[str]:
     s = re.sub(r"~", "-", s)
 
     # ± 表达：提取中心值
-    m_pm = re.search(r"^\s*([+-]?\d[\d,]*(?:\.\d+)?)\s*±\s*([+-]?\d[\d,]*(?:\.\d+)?)\s*$", s)
+    m_pm = re.search(rf"^\s*({_NUMBER})\s*±\s*({_NUMBER})\s*$", s)
     if m_pm:
         center = m_pm.group(1).replace(",", "")
-        return str(float(center)) if re.search(r"\.", center) else str(int(float(center)))
+        return _fmt_number(float(center)), s[m_pm.end():]
 
-    # 范围（两端数字）
-    nums = re.findall(r"[+-]?\d[\d,]*(?:\.\d+)?", s)
-    nums_clean = [n.replace(",", "") for n in nums]
-    if "-" in s or " to " in s or "~" in s:
-        if len(nums_clean) >= 2:
-            a, b = float(nums_clean[0]), float(nums_clean[1])
-            lo, hi = (a, b) if a <= b else (b, a)
-            def _fmt(x: float) -> str:
-                xi = int(x)
-                return str(xi) if abs(x - xi) < 1e-12 else str(x)
-            return f"{_fmt(lo)}-{_fmt(hi)}"
+    # 范围：仅当两个端点确实由连字符相连（词形范围已在上面替换为 "-"/"~"）
+    m_range = _RANGE_RE.search(s)
+    if m_range:
+        a = float(m_range.group(1).replace(",", ""))
+        b = float(m_range.group(2).replace(",", ""))
+        lo, hi = (a, b) if a <= b else (b, a)
+        return f"{_fmt_number(lo)}-{_fmt_number(hi)}", s[:m_range.start()] + s[m_range.end():]
 
-    # 单值：取首个数字
-    if nums_clean:
-        v = nums_clean[0]
-        return str(float(v)) if re.search(r"\.", v) else str(int(float(v)))
+    # 单值：取首个完整数字（含科学计数法），其后为单位文本
+    m_one = _FIRST_NUMBER_RE.search(s)
+    if m_one:
+        return _fmt_number(float(m_one.group(0).replace(",", ""))), s[:m_one.start()] + s[m_one.end():]
 
-    return None
+    return None, ""
 
 # ---- Ensemble: Numeric Items — Numeric + unit normalization ----
 # Extends normalize_numeric_string by also extracting and normalizing unit tokens
@@ -296,23 +323,95 @@ def normalize_numeric_with_unit(value: Any) -> Optional[str]:
     4. 否则，将单位 token 转为小写、去重并排序后，用空格连接，拼在 base 后面：
        返回 f"{base} {unit_str}"。
     """
-    base = normalize_numeric_string(value)
+    return normalize_numeric_with_explicit_unit(value, None)
+
+
+def normalize_unit(unit: Any) -> str:
+    """
+    规范化“内联”单位文本：提取 token 后小写 + 去重 + 排序，
+    保证书写顺序不同（"kg m-2" vs "m-2 kg"）得到相同规范表达。
+    这是旧的内联单位行为，仅用于 unit 列缺失时的回退。
+    无单位 -> ""（空串）。
+    """
+    if unit is None:
+        return ""
+    s = str(unit).strip()
+    if not s or _is_invalid_str(s):
+        return ""
+    tokens = re.findall(r"[A-Za-zμ%°/][A-Za-z0-9μ%°/\^\-]*", s)
+    return " ".join(sorted({tok.lower() for tok in tokens}))
+
+
+# 独立 unit 字段的规范形式：按"单位 token"切分后排序，但保留 token 的大小写
+# 与 ¯/²/¹/μ/°/%// 等排版单位字符（SI 前缀大小写敏感：mW != MW != uW）。
+#
+# ponytail: token 切分只识别 ASCII/希腊字母/常见排版符号，
+# 不足以理解 "mg m-2 yr-1" 与 "mgC m-2 yr-1" 之外的单位体系；
+# 需要真正的单位本体（换算表）时再引入，这里刻意不猜测等价。
+# 只在分隔符处切分，数字/指数必须留在所属 token 内（"m-2" 不能被拆成 "m"）。
+# 不以 "/" 切分：否则 "mg/m3" 会与 "mg m3" 合并，量纲不同却被当成同一单位。
+_EXPLICIT_UNIT_SPLIT_RE = re.compile(r"[\s\u3000\u30fb\u00b7.(),]+")
+
+
+def normalize_explicit_unit(unit: Any) -> str:
+    """
+    规范化 producer 的独立 unit 字段（prompts.py 的 'unit' 列）。
+    保留大小写：SI 前缀大小写敏感（mW != MW != uW），
+    因此 mW 与 MW 必然落在不同票箱。
+    """
+    if unit is None:
+        return ""
+    s = str(unit).strip()
+    if not s or _is_invalid_str(s):
+        return ""
+    tokens = [t for t in _EXPLICIT_UNIT_SPLIT_RE.split(s) if t]
+    if not tokens:
+        return ""
+    # 按规范化排序键排序（大小写不敏感）但输出原 token，
+    # 这样 "mg m-2 h-1" 与 "m-2 h-1 mg" 合并，"mW" 与 "MW" 不会。
+    return " ".join(sorted(set(tokens), key=lambda t: (t.lower(), t)))
+
+
+def normalize_numeric_with_explicit_unit(value: Any, unit: Any = None) -> Optional[str]:
+    """
+    消费 producer 的独立 unit 字段（prompts.py 的 'unit' 列），并把单位保留进规范值。
+
+    规则
+    ----
+    1. base = normalize_numeric_string(value)（自动剥离内联单位文本）；None -> None。
+    2. unit 字段有效时优先使用它；否则回退到 value 字符串中的内联单位（保留旧行为）。
+    3. 无单位 -> 只返回 base（与原逻辑完全一致）。
+
+    不做任何物理单位换算：不同显式单位因此必然得到不同规范值，
+    mg m-2 h-1 与 g m-2 h-1 不会被并进同一票箱。
+    """
+    return _normalize_value_unit_pair(value, unit)[0]
+
+
+def _normalize_value_unit_pair(value: Any, unit: Any) -> Tuple[Optional[str], str, str, bool]:
+    """
+    (value, unit) -> (normalized_value, scalar_value, normalized_unit, unit_is_explicit)。
+    normalized_value 是“数值 + 单位”的联合键（用于票箱分组与明细可追溯）；
+    scalar_value 是纯数值部分（显式 unit 列的结果行用它，避免重复携带单位）；
+    normalized_unit 为 "" 表示无单位；
+    unit_is_explicit 表示单位来自 producer 的独立 unit 列（而非 value 内联文本）。
+    """
+    base, remainder = _parse_numeric_prefix(value)
     if base is None:
-        return None
+        return None, "", "", False
+    explicit = normalize_explicit_unit(unit)
+    unit_str = explicit or normalize_unit(remainder)
+    return (f"{base} {unit_str}" if unit_str else base), base, unit_str, bool(explicit)
 
-    s = str(value)
 
-    # 提取单位 token
-    unit_tokens = re.findall(r"[A-Za-zμ%°/][A-Za-z0-9μ%°/\^\-]*", s)
-    if not unit_tokens:
-        # 无单位 -> 保持与原逻辑一致
-        return base
-
-    # 小写 + 去重 + 排序，保证不同书写顺序得到相同的规范表达
-    unit_tokens_norm = sorted({tok.lower() for tok in unit_tokens})
-    unit_str = " ".join(unit_tokens_norm)
-
-    return f"{base} {unit_str}"
+def _coerce_confidence_sum(values: pd.Series) -> Tuple[float, int]:
+    """
+    求置信度和：非法/缺失项按等权 1.0 处理（与各 tally 路径一致），
+    并返回被丢弃的非法项数量，供调用方明确告警而不是静默丢数据。
+    """
+    numeric = pd.to_numeric(values, errors="coerce")
+    invalid = int(numeric.isna().sum())
+    return float(numeric.fillna(1.0).sum()), invalid
 
 
 def _is_meaningless_value(v_norm: Optional[str], meaningless_values: Iterable[str]) -> bool:
@@ -330,7 +429,7 @@ def _tally_votes_numeric(df_group: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     tally: Dict[str, Dict[str, Any]] = {}
     for _, r in df_group.iterrows():
         # 使用“数值 + 单位”的标准化形式
-        v_norm = normalize_numeric_with_unit(r.get("value"))
+        v_norm = normalize_numeric_with_explicit_unit(r.get("value"), r.get("unit"))
         # 无意义标记仍由上层的 _meaningless 控制（基于纯数值）
         if v_norm in (None, "") or r.get("_meaningless", False):
             continue
@@ -385,7 +484,10 @@ def ensemble_numeric_dataframe_all_data(
     - paper_index
     - question_index
     - item              : 代表性 item 名称（同一等价类内出现次数最多的 item_norm）
-    - normalized_value  : 由 normalize_numeric_with_unit 得到的“数值 + 单位”的规范表达
+    - normalized_value  : 由 normalize_numeric_with_explicit_unit 得到的“数值 + 单位”的规范表达
+    - scalar_value      : 纯数值部分（显式 unit 列的结果行用它，避免重复携带单位）
+    - unit              : 规范化后的单位（来自 unit 列，缺失时取内联单位），无单位为 ""
+    - unit_is_explicit  : True 表示单位来自 producer 的独立 unit 列
     - count             : 该标准化值在该 (paper, question, item 等价) 内的票数
     - confidence_sum    : 上述票对应的置信度和
     - models            : 给出该值的模型集合，逗号分隔
@@ -436,8 +538,17 @@ def ensemble_numeric_dataframe_all_data(
     use_df["_v_numeric"] = use_df["value"].map(normalize_numeric_string)
     use_df["_meaningless"] = use_df["_v_numeric"].map(lambda v: _is_meaningless_value(v, meaningless_values))
 
-    # 数值 + 单位 的标准化
-    use_df["normalized_value"] = use_df["value"].map(normalize_numeric_with_unit)
+    # 数值 + 单位 的标准化：消费 producer 的独立 unit 列（F03），缺失时回退内联单位
+    unit_col = "unit" if "unit" in use_df.columns else None
+    pairs = [
+        _normalize_value_unit_pair(v, r.get(unit_col) if unit_col else None)
+        for v, r in zip(use_df["value"], use_df.to_dict("records"))
+    ]
+    use_df["normalized_value"] = [p[0] for p in pairs]
+    use_df["scalar_value"] = [p[1] for p in pairs]
+    use_df["normalized_unit"] = [p[2] for p in pairs]
+    # 单位来源标记：True = 来自 producer 独立 unit 列；False = value 内联单位
+    use_df["_unit_is_explicit"] = [p[3] for p in pairs]
 
     # 过滤无意义或无法解析的值
     mask_valid = (~use_df["_meaningless"]) & use_df["normalized_value"].notna() & (use_df["normalized_value"] != "")
@@ -446,7 +557,8 @@ def ensemble_numeric_dataframe_all_data(
         return pd.DataFrame(
             columns=[
                 "paper_index", "question_index", "item",
-                "normalized_value", "count", "confidence_sum", "models",
+                "normalized_value", "scalar_value", "unit", "unit_is_explicit",
+                "count", "confidence_sum", "models",
             ]
         )
 
@@ -461,10 +573,23 @@ def ensemble_numeric_dataframe_all_data(
     for (pid, qid, iteq, vnorm), g in grouped:
         # 聚合票数与置信度
         count = len(g)
-        conf_sum = float(g["confidence_lv"].fillna(1.0).astype(float).sum())
+        conf_sum, n_bad_conf = _coerce_confidence_sum(g["confidence_lv"])
+        if n_bad_conf:
+            warnings.warn(
+                f"{n_bad_conf}/{count} non-numeric or missing confidence_lv coerced to equal weight 1.0 "
+                f"(paper_index={pid}, question_index={qid}, value={vnorm!r})",
+                RuntimeWarning,
+                stacklevel=2,
+            )
         models = sorted({str(m).strip() for m in g["model"].tolist() if pd.notna(m)})
 
         item_display = rep_map.get((pid, qid, iteq), g["item_norm"].iloc[0])
+        # 同一票箱内单位必然一致（不同单位已按 normalized_value 分箱）
+        units = sorted({u for u in g["normalized_unit"].tolist() if u})
+        # 显式 unit 列的候选必须以标量值 + 独立 unit 输出；内联单位保留旧的联合字符串
+        unit_is_explicit = bool(g["_unit_is_explicit"].any())
+        normalized_unit = units[0] if units else ""
+        scalar_value = str(g["scalar_value"].iloc[0])
 
         rows.append(
             {
@@ -472,6 +597,9 @@ def ensemble_numeric_dataframe_all_data(
                 "question_index": qid,
                 "item": item_display,
                 "normalized_value": vnorm,
+                "scalar_value": scalar_value,
+                "unit": normalized_unit,
+                "unit_is_explicit": unit_is_explicit,
                 "count": count,
                 "confidence_sum": conf_sum,
                 "models": ",".join(models),
@@ -482,8 +610,8 @@ def ensemble_numeric_dataframe_all_data(
     if not out.empty:
         out = _safe_sort(
             out,
-            ["paper_index", "question_index", "item", "count", "confidence_sum", "normalized_value"],
-            [True, True, True, False, False, True],
+            ["paper_index", "question_index", "item", "count", "confidence_sum", "normalized_value", "unit"],
+            [True, True, True, False, False, True, True],
         )
 
     return out
@@ -563,13 +691,23 @@ def ensemble_numeric_dataframe(
     if base.empty:
         return pd.DataFrame(columns=[
             "paper_index", "question_index", "item",
-            "ensemble_value", "vote_count", "models"
+            "ensemble_value", "unit", "unit_is_explicit", "vote_count", "models"
         ])
 
     prefer_l = (prefer or "votes").lower()
     second_l = (second or "confidence").lower()
 
     rows: List[Dict[str, Any]] = []
+
+    def _result_value(best: Any) -> str:
+        """
+        结果行的取值：
+        * 显式 unit 列（unit_is_explicit）-> 只返回标量数值，单位单独放在 unit 列；
+        * 内联单位（旧的联合字符串行为）-> 原样保留“数值 + 单位”。
+        """
+        if bool(best.get("unit_is_explicit", False)):
+            return str(best.get("scalar_value", best.get("normalized_value", "")))
+        return str(best.get("normalized_value", ""))
 
     if not decimals_majority:
         # 默认模式：仍按 (paper_index, question_index, item) 分组集成
@@ -588,7 +726,9 @@ def ensemble_numeric_dataframe(
                 "paper_index": pid,
                 "question_index": qid,
                 "item": item,
-                "ensemble_value": best["normalized_value"],
+                "ensemble_value": _result_value(best),
+                "unit": str(best.get("unit", "") or ""),
+                "unit_is_explicit": bool(best.get("unit_is_explicit", False)),
                 "vote_count": int(best["count"]),
                 "models": str(best.get("models", "")),
             })
@@ -630,6 +770,9 @@ def ensemble_numeric_dataframe(
 
                 agg_rows.append({
                     "normalized_value": vnorm,
+                    "scalar_value": str(g_v["scalar_value"].iloc[0]),
+                    "unit": str(g_v["unit"].iloc[0] or ""),
+                    "unit_is_explicit": bool(g_v["unit_is_explicit"].any()),
                     "item": item_repr,
                     "vote_count": total_count,
                     "models": ",".join(sorted(all_models)),
@@ -646,7 +789,9 @@ def ensemble_numeric_dataframe(
                     "paper_index": pid,
                     "question_index": qid,
                     "item": r["item"],
-                    "ensemble_value": r["normalized_value"],
+                    "ensemble_value": _result_value(r),
+                    "unit": str(r.get("unit", "") or ""),
+                    "unit_is_explicit": bool(r.get("unit_is_explicit", False)),
                     "vote_count": int(r["vote_count"]),
                     "models": str(r.get("models", "")),
                 })
@@ -720,7 +865,10 @@ def summarize_value_options(
     meaningless_values = set(meaningless_values) if meaningless_values is not None else _DEFAULT_MEANINGLESS_VALUES
     sub["_v_numeric"] = sub["value"].map(normalize_numeric_string)
     sub["_meaningless"] = sub["_v_numeric"].map(lambda v: _is_meaningless_value(v, meaningless_values))
-    sub["value_norm"] = sub["value"].map(normalize_numeric_with_unit)
+    sub["value_norm"] = [
+        normalize_numeric_with_explicit_unit(v, u)
+        for v, u in zip(sub["value"], sub["unit"] if "unit" in sub.columns else [None] * len(sub))
+    ]
 
     tally: Dict[str, Dict[str, Any]] = {}
     total_votes = 0
@@ -917,7 +1065,10 @@ def summarize_value_majorities_by_numeric(
     meaningless_values = set(meaningless_values) if meaningless_values is not None else _DEFAULT_MEANINGLESS_VALUES
     use_df["_v_numeric"] = use_df["value"].map(normalize_numeric_string)
     use_df["_meaningless"] = use_df["_v_numeric"].map(lambda v: _is_meaningless_value(v, meaningless_values))
-    use_df["value_norm"] = use_df["value"].map(normalize_numeric_with_unit)
+    use_df["value_norm"] = [
+        normalize_numeric_with_explicit_unit(v, u)
+        for v, u in zip(use_df["value"], use_df["unit"] if "unit" in use_df.columns else [None] * len(use_df))
+    ]
 
     # 过滤掉无意义/空值
     use_df = use_df[~use_df["_meaningless"]].copy()

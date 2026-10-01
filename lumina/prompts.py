@@ -44,7 +44,7 @@ Please read this markdown content:\n{content}
 message_system_ragQuery = """
 You are a scientific evidence verifier rather than a strict semantic fact-checker. 
 You are going to check:
-If the provided sentence, paragraph, or table closely aligns with the most relevant texts measured by vectorizations, return Yes if so, return No if not.
+Return a JSON object with existing_flag (1 if the evidence exists and is related, otherwise 0) and direct_quote (a verbatim supporting quote, or null). Follow the evidence-existence rules in the user instructions.
 """
 
 # ---- Stage 4: Cross-Validation — Verification Task (消息 2) ----
@@ -86,8 +86,8 @@ Our answer to the {key_topic} is {answer}.
   
 Example:
 {{
-    'existing_flag': 0,
-    'direct_quote': N/A,
+    "existing_flag": 0,
+    "direct_quote": null
 }}
 """
 
@@ -123,8 +123,8 @@ Our answer is {answer}.
   
 Example:
 {{
-    'existing_flag': 0,
-    'direct_quote': N/A,
+    "existing_flag": 0,
+    "direct_quote": null
 }}
 """
 
@@ -145,37 +145,31 @@ Directly extract the content (full sentence or the Table titles) from the articl
 4. The latitude and longitude should be in decimal format
 The answer should be provided exclusively in JSON format, following the example structure below:
 {
-    'Study_location': 
-    {
-        'value': Location;
-        'evidence': textual evidence or table title;
-        'confidence_lv': 100;
+    "Study_location": {
+        "value": "Example location",
+        "evidence": "Exact source quote or table title",
+        "confidence_lv": 100
+    },
+    "Study_location_detail": {
+        "value": "Example province, city",
+        "evidence": "Exact source quote",
+        "confidence_lv": 100
+    },
+    "Study_period": {
+        "value": "2003-2017",
+        "evidence": "Exact source quote",
+        "confidence_lv": 80
+    },
+    "Latitude": {
+        "value": 45,
+        "evidence": "Exact source quote",
+        "confidence_lv": 100
+    },
+    "Longitude": {
+        "value": 130,
+        "evidence": "Exact source quote",
+        "confidence_lv": 90
     }
-    'Study_location_detail': 
-    {
-        'value': Province, City;
-        'evidence': textual evidence or table title;
-        'confidence_lv': 100;
-    }
-    'Study_period': 
-    {
-        'value': 2003-2017;
-        'evidence': textual evidence or table title;
-        'confidence_lv': 80;
-    }
-    'Latitude':
-    {
-        'value': 45°N;
-        'evidence': textual evidence or table title;
-        'confidence_lv': 100;
-    }
-    'Longitude':
-    {
-        'value': 130°E;
-        'evidence': textual evidence or table title;
-        'confidence_lv': 90;
-    }
-    
 }
 """
 
@@ -194,11 +188,10 @@ Directly extract the content (full sentence or the Table titles) from the articl
 
 The answer should be provided exclusively in JSON format, following the example structure below:
 {
-    'Specie': 
-    {
-        'value': A [fish];
-        'evidence': textual evidence or table title;
-        'confidence_lv': 100;
+    "Specie": {
+        "value": "A [fish]",
+        "evidence": "Exact source quote or table title",
+        "confidence_lv": 100
     }
 }
 """
@@ -218,16 +211,13 @@ Directly extract the content (full sentence or the Table titles) from the articl
 
 The answer should be provided exclusively in JSON format and may include multiple items, following the example structure below:
 {
-    'Flux-1': 
-    {
-        'value': 2. 12;
-        'evidence': textual evidence or table title;
-        'confidence_lv': 95;        
-        'unit': mg・m¯².h¯¹;
+    "Flux-1": {
+        "value": 2.12,
+        "evidence": "Exact source quote or table title",
+        "confidence_lv": 95,
+        "unit": "mg m-2 h-1"
     }
-    ...
 }
-
 """
 
 # -------------------------
@@ -249,17 +239,15 @@ When there are no relevant information, the confidence_lv shoule be set to -1
 
 The answer should be provided exclusively in JSON format, following the example structure below:
 {
-    'Study_location': 
-    {
-        'value': name(s) of the study area;
-        'evidence': textual evidence or table title;
-        'confidence_lv': 100;
-    }
-    'Study_period': 
-    {
-        'value': 2003-2017;
-        'evidence': textual evidence or table title;
-        'confidence_lv': 100;
+    "Study_location": {
+        "value": "Example location",
+        "evidence": "Exact source quote",
+        "confidence_lv": 100
+    },
+    "Study_period": {
+        "value": "2003-2017",
+        "evidence": "Exact source quote",
+        "confidence_lv": 80
     }
 }
 """
@@ -288,23 +276,20 @@ list all of them with markers in experimental key.
 
 The answer should be provided exclusively in JSON format, following the example structure below:
 {{
-    'Forest_smoldering':
-    {{
-        'value': 1675;
-        'evidence': Table 2, Emission factors for forest combustion;
-        'confidence_lv': 95;
-        'mce': None,
-        'experimental': Ref
+    "Forest_smoldering": {{
+        "value": 1675,
+        "evidence": "Table 2, emission factors for forest combustion",
+        "confidence_lv": 95,
+        "mce": null,
+        "experimental": "Ref"
+    }},
+    "Forest_flamming": {{
+        "value": 1755,
+        "evidence": "Table 2, emission factors for forest combustion",
+        "confidence_lv": 95,
+        "mce": null,
+        "experimental": "Ref"
     }}
-    'Forest_flamming':
-    {{
-        'value': 1755;
-        'evidence': Table 2, Emission factors for forest combustion;
-        'confidence_lv': 95;
-        'mce': None,
-        'experimental': Ref
-    }}
-    ...
 }}
 """
 
