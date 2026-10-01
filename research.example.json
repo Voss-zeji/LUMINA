@@ -1,0 +1,39 @@
+{
+  "domain": "aqua",
+  "papers": [
+    "./data/pdfs/aqua/REPLACE_with_your_first_paper_path.md",
+    "./data/pdfs/aqua/REPLACE_with_your_second_paper_path.md"
+  ],
+  "rounds": [1],
+  "smoke_size": 1,
+  "budget": {
+    "max_calls": null,
+    "max_tokens": null,
+    "max_cost": null,
+    "max_runtime": null
+  },
+  "pricing": {
+    "DeepSeek-R1": {
+      "input_per_million": null,
+      "output_per_million": null,
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "basis": "REPLACE: name the provider and the dated price evidence used for this model; do not guess"
+    },
+    "Kimi-K2-Instruct-0905": {
+      "input_per_million": null,
+      "output_per_million": null,
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "basis": "REPLACE: name the provider and the dated price evidence used for this model; do not guess"
+    },
+    "Qwen/Qwen3-Embedding-8B": {
+      "input_per_million": null,
+      "output_per_million": null,
+      "max_input_tokens": null,
+      "max_output_tokens": null,
+      "basis": "REPLACE: name the provider and the dated price evidence used for the embedding model; do not guess"
+    }
+  },
+  "advisor": null
+}

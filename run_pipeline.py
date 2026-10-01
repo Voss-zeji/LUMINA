@@ -60,7 +60,7 @@ def run(domain: str, stage: str, config) -> None:
             save_json(status, dict(status='succeeded', stage=stage, round_index=config.RUN['round_index']))
 
 
-def _run(domain: str, stage: str, config) -> None:
+def _run(domain: str, stage: str, config, runtime=None) -> None:
     from lumina import composite, cross_validation, ensemble, examiner, preparation
     from lumina.utils import model_name
 
@@ -71,6 +71,7 @@ def _run(domain: str, stage: str, config) -> None:
     selected_model_names = [model_name(llm) for llm in llm_dicts.values()]
     from lumina import prompts
     n_questions = len(prompts.questions_for_domain(domain))
+    runtime_args = {} if runtime is None else {"runtime": runtime}
     if domain_cfg["questions"] != list(range(1, n_questions + 1)):
         raise ValueError("config.questions must match the fixed domain question indices; partial/custom question selection is not implemented")
     if type(config.RUN.get('round_index')) is not int or config.RUN['round_index'] < 1:
@@ -85,13 +86,13 @@ def _run(domain: str, stage: str, config) -> None:
         for row in preparation.token_audit([str(p) for p in mds]):
             print(row)
     if stage in ("examiner", "all"):
-        examiner.run_examiner_for_domain(domain, domain_cfg, llm_dicts, config.LLM_SETTINGS, config.RUN)
+        examiner.run_examiner_for_domain(domain, domain_cfg, llm_dicts, config.LLM_SETTINGS, config.RUN, **runtime_args)
     if stage in ("composite", "all"):
         composite.create_baseline_composite(domain_cfg, list(range(1, n_questions + 1)), models=selected_model_names,
             round_index=config.RUN['round_index'], domain=domain,
             expected_tasks=examiner.expected_tasks(domain, domain_cfg, llm_dicts, config.LLM_SETTINGS, config.RUN))
     if stage in ("embeddings", "all"):
-        cross_validation.generate_embeddings_for_domain(domain_cfg, config.EMBEDDING_MODEL, config.LLM_SETTINGS, config.RUN)
+        cross_validation.generate_embeddings_for_domain(domain_cfg, config.EMBEDDING_MODEL, config.LLM_SETTINGS, config.RUN, **runtime_args)
     if stage in ("cross", "all"):
         validate_composites(domain, domain_cfg, llm_dicts, config.LLM_SETTINGS, config.RUN)
         cross_validation.cross_validate_domain(
@@ -102,6 +103,7 @@ def _run(domain: str, stage: str, config) -> None:
             config.EMBEDDING_MODEL,
             config.RUN,
             selected_model_names,
+            **runtime_args,
         )
         cross_validation.aggregate_cross_scores(domain_cfg, selected_model_names,
             expected_verifiers=cross_validation.verifier_signatures(llm_dicts, config.LLM_SETTINGS, config.EMBEDDING_MODEL, config.RUN))
@@ -146,7 +148,13 @@ def validate_composites(domain: str, domain_cfg: dict, models: dict, settings: d
 #   4. cross      → Cross-validation: verify evidence via embedding retrieval
 #   5. ensemble   → Consensus voting with cross_score threshold filtering
 #   all           → Run stages 0→5 in sequence
-def main() -> None:
+def main(argv=None) -> None:
+    import sys
+
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in {"run", "status", "pause", "resume", "approve", "report", "evaluate", "import"}:
+        from lumina.agent.cli import main as agent_main
+        raise SystemExit(agent_main(argv))
     parser = argparse.ArgumentParser(description="LUMINA aqua/wildfire pipeline")
     parser.add_argument("--config", default="config.py", help="Path to a filled config.py (default: ./config.py)")
     parser.add_argument("--domain", required=True, choices=["aqua", "wildfire"])
@@ -155,7 +163,7 @@ def main() -> None:
         required=True,
         choices=["prepare", "examiner", "composite", "embeddings", "cross", "ensemble", "all"],
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     config = load_config(args.config)
     run(args.domain, args.stage, config)
 
