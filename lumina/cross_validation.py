@@ -1,273 +1,238 @@
 from __future__ import annotations
 
-import os
-import time
 from pathlib import Path
+import time
 
 import numpy as np
 import pandas as pd
-from langchain.text_splitter import MarkdownTextSplitter
+from langchain_text_splitters import MarkdownTextSplitter
 from sklearn.metrics.pairwise import cosine_similarity
 
 from . import prompts
-from .common import (
-    ensure_directory_exists,
-    error_cross_result,
-    invalid_cross_result,
-    paper_prefix_from_path,
-    refineJsonString,
-    turnIntoPureText,
-)
+from .common import (atomic_output, candidate_id, error_details, fingerprint, filename_token,
+                     invalid_path, load_json, paper_markdowns, read_composite,
+                     refineJsonString, save_json, turnIntoPureText, write_dataframe, write_invalid_text)
 from .llm import embedding_response, llm_requery
 from .utils import model_name, sleep_for_rate_limit
 
-_INVALID_EVIDENCE = {"nan", "na", "n/a", "none", "null", ""}
+_INVALID_EVIDENCE = {'nan', 'na', 'n/a', 'none', 'null', ''}
 
 
-# ---- Stage 3: Embeddings — Generate and cache chunk vectors for one domain ----
-# 1. Split each paper's markdown into chunks (chunk_size=2048, overlap=20%)
-# 2. Generate embeddings via the configured embedding model
-# 3. Cache as .npy files for reuse across cross-validation runs
 def save_embeddings(file_path: str, array: np.ndarray) -> None:
-    ensure_directory_exists(Path(file_path).parent)
-    np.save(file_path, array)
+    with atomic_output(file_path) as temp:
+        with temp.open('wb') as stream:
+            np.save(stream, array, allow_pickle=False)
 
 
 def load_embeddings(file_path: str):
-    if not os.path.exists(file_path):
-        return None
     try:
-        return np.load(file_path)
+        return np.load(file_path, allow_pickle=False)
     except (EOFError, OSError, ValueError):
         return None
 
 
 def embedding_file(domain_cfg: dict, paper_prefix: str, chunk_size: int, overlap_percent: int) -> str:
-    return os.path.join(
-        domain_cfg["embedding_dir"],
-        f"Paper{str(paper_prefix).zfill(2)}",
-        f"ChunkSize{str(chunk_size).zfill(5)}_Overlap{str(overlap_percent).zfill(3)}.npy",
-    )
+    return str(Path(domain_cfg['embedding_dir']) / f'Paper{paper_prefix}' /
+               f'ChunkSize{chunk_size:05d}_Overlap{overlap_percent:03d}.npy')
 
 
 def _splitter(run_cfg: dict) -> MarkdownTextSplitter:
-    return MarkdownTextSplitter(
-        chunk_size=run_cfg["chunk_size"],
-        chunk_overlap=run_cfg["chunk_size"] * (run_cfg["overlap_percent"] / 100),
-    )
-
-
-def independent_verifiers(llm_dicts: dict, selected_model_names: list[str], input_model: str) -> list[dict]:
-    return [
-        llm
-        for llm in llm_dicts.values()
-        if model_name(llm) in selected_model_names and model_name(llm) != input_model
-    ]
-
-
-def _successful_cross_output(output_file: Path) -> bool:
-    try:
-        result = pd.read_csv(output_file, sep="\t")
-    except Exception:
-        return False
-    if result.empty or "existing_flag" not in result.columns:
-        return False
-    flags = pd.to_numeric(result["existing_flag"], errors="coerce")
-    return flags.isin([0, 1]).all()
-
-
-def generate_embeddings_for_domain(domain_cfg: dict, embedding_model: dict, llm_settings: dict, run_cfg: dict) -> None:
-    splitter = _splitter(run_cfg)
-    for raw_markdown in sorted(Path(domain_cfg["markdown_dir"]).glob("*.md")):
-        before_refs = turnIntoPureText(raw_markdown)
-        paper_prefix = paper_prefix_from_path(raw_markdown)
-        out_file = embedding_file(domain_cfg, paper_prefix, run_cfg["chunk_size"], run_cfg["overlap_percent"])
-        chunks = splitter.split_text(before_refs)
-        if os.path.exists(out_file):
-            cached = load_embeddings(out_file)
-            if cached is not None and cached.ndim == 2 and len(cached) == len(chunks):
-                continue
-            print(f"rebuilding stale embedding cache: {out_file}")
-        vectors = np.array([embedding_response(chunk, embedding_model, llm_settings) for chunk in chunks])
-        save_embeddings(out_file, vectors)
-        print(f"embedded Paper {paper_prefix} ({len(chunks)} chunks)")
+    size, overlap = run_cfg['chunk_size'], run_cfg['overlap_percent']
+    if type(size) is not int or size <= 0 or not 0 <= overlap < 100:
+        raise ValueError('chunk_size must be a positive integer and overlap_percent in [0,100)')
+    return MarkdownTextSplitter(chunk_size=size, chunk_overlap=int(size * overlap / 100))
 
 
 def _chunks_for_paper(markdown_path: str, run_cfg: dict) -> list[str]:
     return _splitter(run_cfg).split_text(turnIntoPureText(markdown_path))
 
 
-# ---- Stage 4: Cross-Validation — Main loop for one domain ----
-# For each question × each row in composite × each evidence:
-#   1. Compute embedding of the evidence text
-#   2. Cosine similarity against all chunk embeddings → find the best chunk
-#   3. Extend context by ±text_extension chunks (default: ±1, so 3 chunks total)
-#   4. For each OTHER LLM (not the one that produced the evidence):
-#      a. Build the checker_requery prompt with context + evidence + key_topic
-#      b. Call llm_requery() → returns {"existing_flag": 0|1, "direct_quote": "..."}
-#      c. Save per-verification CSV with metadata (similarity, token, time)
-#   5. aggregate_cross_scores() merges all verification votes back into composite
-def cross_validate_domain(
-    domain: str,
-    domain_cfg: dict,
-    llm_dicts: dict,
-    llm_settings: dict,
-    embedding_model: dict,
-    run_cfg: dict,
-    selected_model_names: list[str],
-) -> None:
-    questions = prompts.questions_for_domain(domain)
-    md_by_prefix = {
-        paper_prefix_from_path(p): str(p) for p in sorted(Path(domain_cfg["markdown_dir"]).glob("*.md"))
-    }
+def _embedding_spec(embedding_model: dict, llm_settings: dict, run_cfg: dict) -> dict:
+    provider = llm_settings.get(embedding_model.get('source'), {})
+    return dict(version=2, model=embedding_model.get('model'), source=embedding_model.get('source'), endpoint=embedding_model.get('url') or provider.get('url'),
+                chunk_size=run_cfg['chunk_size'], overlap_percent=run_cfg['overlap_percent'])
 
-    for question_index in range(1, len(questions) + 1):
-        composite_file = Path(domain_cfg["composite_dir"]) / f"{domain_cfg['composite_prefix']}_Q{question_index:02d}.xlsx"
-        if not composite_file.exists():
-            print(f"missing composite: {composite_file}")
+
+def _valid_vectors(array, count: int) -> bool:
+    return (isinstance(array, np.ndarray) and array.ndim == 2 and array.shape[0] == count
+            and array.shape[1] > 0 and np.issubdtype(array.dtype, np.number)
+            and np.isfinite(array).all() and (np.linalg.norm(array, axis=1) > 0).all())
+
+
+def _paper_embeddings(domain_cfg: dict, paper: str, chunks: list[str], embedding_model: dict,
+                      llm_settings: dict, run_cfg: dict) -> np.ndarray:
+    if not chunks:
+        raise ValueError(f'empty chunks for Paper {paper}')
+    output = Path(embedding_file(domain_cfg, paper, run_cfg['chunk_size'], run_cfg['overlap_percent']))
+    signature = fingerprint(dict(spec=_embedding_spec(embedding_model, llm_settings, run_cfg), chunks=chunks))
+    metadata = load_json(output.with_suffix('.meta.json')) if output.with_suffix('.meta.json').exists() else None
+    cached = load_embeddings(str(output))
+    if metadata and metadata.get('fingerprint') == signature and _valid_vectors(cached, len(chunks)):
+        if metadata.get('dimensions') == cached.shape[1]:
+            return cached
+    vectors = np.array([embedding_response(chunk, embedding_model, llm_settings) for chunk in chunks], dtype=float)
+    if not _valid_vectors(vectors, len(chunks)):
+        raise ValueError(f'invalid embedding shape/numbers for Paper {paper}')
+    save_embeddings(str(output), vectors)
+    save_json(output.with_suffix('.meta.json'), dict(fingerprint=signature, dimensions=vectors.shape[1], chunks=len(chunks)))
+    return vectors
+
+
+def generate_embeddings_for_domain(domain_cfg: dict, embedding_model: dict, llm_settings: dict, run_cfg: dict) -> None:
+    for paper, path in paper_markdowns(domain_cfg['markdown_dir']).items():
+        chunks = _chunks_for_paper(str(path), run_cfg)
+        _paper_embeddings(domain_cfg, paper, chunks, embedding_model, llm_settings, run_cfg)
+        print(f'embedded Paper {paper} ({len(chunks)} chunks)')
+
+
+def independent_verifiers(llm_dicts: dict, selected_model_names: list[str], input_model: str) -> list[dict]:
+    return [llm for llm in llm_dicts.values()
+            if model_name(llm) in selected_model_names and model_name(llm) != input_model]
+
+
+def verifier_signatures(llm_dicts: dict, llm_settings: dict, embedding_model: dict, run_cfg: dict) -> dict[str, str]:
+    result = {}
+    for llm in llm_dicts.values():
+        provider = llm_settings.get(llm.get('source'), {})
+        result[model_name(llm)] = fingerprint(dict(version=2, model=llm['model'], source=llm.get('source'), endpoint=provider.get('url'),
+            json_mode=provider.get('supports_json_mode', True), temperature=run_cfg['temperature'],
+            embedding=_embedding_spec(embedding_model, llm_settings, run_cfg), extension=run_cfg['text_extension'],
+            system=prompts.message_system_ragQuery, checker=prompts.checker_requery))
+    return result
+
+
+def _successful_cross_output(output_file: Path, expected: str | None = None) -> bool:
+    try:
+        result = pd.read_csv(output_file, sep='\t', keep_default_na=False, dtype={'direct_quote': str})
+        if len(result) != 1 or not {'existing_flag', 'direct_quote', 'verification_fingerprint'}.issubset(result):
+            return False
+        flags = pd.to_numeric(result['existing_flag'], errors='coerce')
+        quote_ok = ((flags == 0) | result.direct_quote.str.strip().ne('')).all()
+        return flags.isin([0, 1]).all() and quote_ok and (expected is None or result.verification_fingerprint.eq(expected).all())
+    except (OSError, ValueError, pd.errors.ParserError):
+        return False
+
+
+def cross_validate_domain(domain: str, domain_cfg: dict, llm_dicts: dict, llm_settings: dict,
+                          embedding_model: dict, run_cfg: dict, selected_model_names: list[str]) -> None:
+    papers = paper_markdowns(domain_cfg['markdown_dir'])
+    signatures = verifier_signatures(llm_dicts, llm_settings, embedding_model, run_cfg)
+    prepared = {}
+    failed = []
+    for question_index in range(1, len(prompts.questions_for_domain(domain)) + 1):
+        file = Path(domain_cfg['composite_dir']) / f"{domain_cfg['composite_prefix']}_Q{question_index:02d}.xlsx"
+        if not file.exists():
+            failed.append(f'missing composite: {file}')
             continue
-        composite = pd.read_excel(composite_file)
-
-        for all_index, row in composite.iterrows():
-            input_model = str(row.get("model", ""))
+        frame = read_composite(file)
+        for all_index, row in frame.iterrows():
+            input_model, paper = row['model'], row['paper_index']
             if input_model not in selected_model_names:
                 continue
-            evidence = str(row.get("evidence", ""))
+            evidence = str(row.get('evidence', ''))
             if evidence.strip().lower() in _INVALID_EVIDENCE:
                 continue
-
-            paper_prefix = str(row.get("paper_index")).zfill(2)
-            md_path = md_by_prefix.get(paper_prefix) or md_by_prefix.get(str(row.get("paper_index")))
-            if md_path is None:
+            if paper not in papers or row['paper_fingerprint'] != fingerprint(turnIntoPureText(papers[paper])):
+                failed.append(f'Paper {paper}: changed/missing source; rerun examiner/composite')
                 continue
-            chunks = _chunks_for_paper(md_path, run_cfg)
-            emb_file = embedding_file(domain_cfg, paper_prefix, run_cfg["chunk_size"], run_cfg["overlap_percent"])
-            response_embeddings = load_embeddings(emb_file)
-            if response_embeddings is None:
-                generate_embeddings_for_domain(domain_cfg, embedding_model, llm_settings, run_cfg)
-                response_embeddings = load_embeddings(emb_file)
-
-            description_embedding = np.array(embedding_response(evidence, embedding_model, llm_settings))
-            similarities = [
-                cosine_similarity(description_embedding.reshape(1, -1), response_embedding.reshape(1, -1))[0][0]
-                for response_embedding in response_embeddings
-            ]
-            chunk_id = int(np.argmax(similarities))
-            ext = run_cfg["text_extension"]
-            optimal_context = "".join(chunks[max(0, chunk_id - ext) : chunk_id + ext + 1])
-
-            crosser_paper_path = Path(domain_cfg["crosser_dir"]) / f"Paper_{paper_prefix}" / f"Q{question_index:02d}"
-            ensure_directory_exists(crosser_paper_path)
-
+            cid = candidate_id(row)
+            pending = []
             for llm in independent_verifiers(llm_dicts, selected_model_names, input_model):
                 output_model = model_name(llm)
-                output_file = crosser_paper_path / f"ItemRawIndex_{str(all_index).zfill(5)}==Input_{input_model}==Output_{output_model}.csv"
-                if output_file.exists() and _successful_cross_output(output_file):
-                    continue
-                output_file.unlink(missing_ok=True)
-
-                time1 = time.time()
-                error = None
+                verification = fingerprint(dict(candidate=cid, verifier=signatures[output_model]))
+                output = (Path(domain_cfg['crosser_dir']) / f'Paper_{paper}' / f'Q{question_index:02d}' /
+                          f"Candidate_{cid}==Output_{filename_token(output_model)}.csv")
+                if not _successful_cross_output(output, verification):
+                    pending.append((llm, output_model, output, verification))
+            if not pending:
+                continue  # Do not pay for evidence embeddings on an unchanged resume.
+            if paper not in prepared:
+                chunks = _chunks_for_paper(str(papers[paper]), run_cfg)
+                vectors = _paper_embeddings(domain_cfg, paper, chunks, embedding_model, llm_settings, run_cfg)
+                prepared[paper] = (chunks, vectors)
+            chunks, vectors = prepared[paper]
+            description = np.asarray(embedding_response(evidence, embedding_model, llm_settings), dtype=float)
+            if description.ndim != 1 or len(description) != vectors.shape[1] or not np.isfinite(description).all() or np.linalg.norm(description) == 0:
+                raise ValueError(f'Paper {paper}: evidence vector incompatible with cached embedding model')
+            similarities = cosine_similarity(description.reshape(1, -1), vectors)[0]
+            chunk_id = int(np.argmax(similarities))
+            extension = run_cfg['text_extension']
+            if type(extension) is not int or extension < 0:
+                raise ValueError('text_extension must be a nonnegative integer')
+            context = '\n\n'.join(chunks[max(0, chunk_id - extension):chunk_id + extension + 1])
+            for llm, output_model, output, verification in pending:
+                start, raw = time.time(), None
                 try:
-                    result, token = llm_requery(
-                        llm,
-                        llm_settings,
-                        prompts.message_system_ragQuery.strip(),
-                        prompts.checker_requery.format(
-                            answer=evidence,
-                            context=optimal_context,
-                            key_topic=row.get("item", ""),
-                        ).strip(),
-                        temperature=run_cfg["temperature"],
-                    )
+                    raw, token = llm_requery(llm, llm_settings, prompts.message_system_ragQuery.strip(),
+                        prompts.checker_requery.format(answer=evidence, context=context, key_topic=row['item']).strip(),
+                        temperature=run_cfg['temperature'])
+                    result = refineJsonString(raw)
+                    if result.get('existing_flag') not in (0, 1) or not isinstance(result.get('direct_quote'), (str, type(None))):
+                        raise ValueError('verifier requires existing_flag 0/1 and scalar direct_quote')
+                    if result['existing_flag'] == 1 and not (result['direct_quote'] or '').strip():
+                        raise ValueError('positive verifier vote requires a nonempty direct_quote')
+                    # Keep existence checking, not a new numeric/unit fact-checking task.
+                    result = dict(existing_flag=int(result['existing_flag']), direct_quote=result['direct_quote'])
                 except Exception as exc:
-                    result, token, error = None, 0, f"LLM_ERROR: {exc}"
-                time2 = time.time()
-
-                parse_failed = False
-                try:
-                    result_df = pd.DataFrame([refineJsonString(result)])
-                except Exception:
-                    parse_failed = True
-                    raw_path = str(output_file).replace(".csv", "_invalid.txt")
-                    with open(raw_path, "w", encoding="utf-8") as f:
-                        f.write(error or ("" if result is None else str(result)))
-                    fallback = error_cross_result() if result is None else invalid_cross_result()
-                    result_df = pd.DataFrame([fallback])
-                    token = 0
-
-                result_df["evaluate_token"] = token
-                result_df["time_consumption"] = time2 - time1
-                result_df["paper_index"] = row.get("paper_index")
-                result_df["question_index"] = question_index
-                result_df["item_raw_index"] = all_index
-                result_df["input_model"] = input_model
-                result_df["output_model"] = output_model
-                result_df["max_similarities"] = float(np.nanmax(similarities))
-                result_df.to_csv(output_file, sep="\t", index=False)
-                if not parse_failed:
-                    Path(str(output_file).replace(".csv", "_invalid.txt")).unlink(missing_ok=True)
-                sleep_for_rate_limit(llm, low_limit_seconds=5, high_limit_seconds=0.1)
+                    detail = error_details(exc, llm_settings)
+                    failed.append(f'Paper {paper} Q{question_index} {input_model}->{output_model}: {detail}')
+                    write_invalid_text(output, f'ERROR {detail}\nRAW: {raw}')
+                    result, token = dict(existing_flag=-1, direct_quote=None), None
+                else:
+                    invalid_path(output).unlink(missing_ok=True)
+                result.update(paper_index=paper, question_index=question_index, item_raw_index=all_index,
+                              candidate_id=cid, input_model=input_model, output_model=output_model,
+                              verification_fingerprint=verification, evaluate_token=token,
+                              time_consumption=time.time() - start, max_similarities=float(similarities[chunk_id]))
+                write_dataframe(pd.DataFrame([result]), output)
+                sleep_for_rate_limit(llm, low_limit_seconds=5, high_limit_seconds=.1)
+    if failed:
+        raise RuntimeError('cross failed: ' + '; '.join(failed))
 
 
-# ---- Stage 4: Cross-Validation — Aggregate verification scores ----
-# 1. Collect all cross-validation CSV rows
-# 2. Pivot to get a flag per verifying model (existing_flag=1 → flag=1)
-# 3. Sum flags across models → cross_score (how many verifying models confirm the evidence)
-# 4. Merge cross_score back into the composite Excel for ensemble filtering
-def aggregate_cross_scores(domain_cfg: dict, selected_model_names: list[str]) -> pd.DataFrame:
-    rows = []
-    for csv_file in Path(domain_cfg["crosser_dir"]).glob("Paper_*/Q*/*.csv"):
+def aggregate_cross_scores(domain_cfg: dict, selected_model_names: list[str],
+                           expected_verifiers: dict[str, str] | None = None) -> pd.DataFrame:
+    votes = {}
+    for file in sorted(Path(domain_cfg['crosser_dir']).glob('Paper_*/Q*/Candidate_*==Output_*.csv')):
         try:
-            rows.append(pd.read_csv(csv_file, sep="\t"))
-        except Exception:
-            continue
-    if not rows:
-        return pd.DataFrame()
-
-    all_votes = pd.concat(rows, ignore_index=True)
-    all_votes = all_votes[all_votes["input_model"] != all_votes["output_model"]]
-    all_votes = all_votes[pd.to_numeric(all_votes["existing_flag"], errors="coerce").isin([0, 1])]
-    if all_votes.empty:
-        return pd.DataFrame()
-    all_votes["flag"] = (pd.to_numeric(all_votes["existing_flag"], errors="coerce") == 1).astype(int)
-    pivot = all_votes.pivot_table(
-        index=["paper_index", "question_index", "item_raw_index", "input_model"],
-        columns="output_model",
-        values="flag",
-        aggfunc="max",
-        fill_value=0,
-    ).reset_index()
-    pivot["paper_index"] = pd.to_numeric(pivot["paper_index"], errors="coerce")
-
-    vote_cols = [c for c in pivot.columns if c in selected_model_names]
-    rename = {c: f"flag_{c}" for c in vote_cols}
-    pivot = pivot.rename(columns=rename)
-    flag_cols = [rename[c] for c in vote_cols]
-    pivot["cross_score"] = pivot[flag_cols].sum(axis=1) if flag_cols else 0
-
-    crosser_dir = Path(domain_cfg["crosser_dir"])
-    ensure_directory_exists(crosser_dir)
-    pivot.to_excel(crosser_dir / "cross_scores.xlsx", index=False)
-
-    composite_dir = Path(domain_cfg["composite_dir"])
-    prefix = domain_cfg["composite_prefix"]
-    merge_cols = ["paper_index", "question_index", "item_raw_index", "input_model"]
-    for question_index in sorted(pivot["question_index"].dropna().unique()):
-        composite_file = composite_dir / f"{prefix}_Q{int(question_index):02d}.xlsx"
-        if not composite_file.exists():
-            continue
-        composite = pd.read_excel(composite_file).reset_index(drop=True)
-        composite["item_raw_index"] = composite.index
-        composite["paper_index"] = pd.to_numeric(composite["paper_index"], errors="coerce")
-        part = pivot[pivot["question_index"] == question_index][merge_cols + flag_cols + ["cross_score"]]
-        merged = composite.merge(
-            part,
-            how="left",
-            left_on=["paper_index", "question_index", "item_raw_index", "model"],
-            right_on=["paper_index", "question_index", "item_raw_index", "input_model"],
-        )
-        if "input_model" in merged.columns:
-            merged = merged.drop(columns=["input_model"])
-        merged.to_excel(composite_file, index=False)
-    return pivot
+            part = pd.read_csv(file, sep='\t', keep_default_na=False, dtype={'paper_index': str, 'direct_quote': str})
+        except (OSError, ValueError, pd.errors.ParserError) as exc:
+            raise ValueError(f'unreadable verifier output {file}: {exc}') from exc
+        required = {'candidate_id', 'input_model', 'output_model', 'existing_flag', 'direct_quote', 'verification_fingerprint'}
+        if not required.issubset(part):
+            continue  # Legacy row-index-only votes cannot establish current evidence support.
+        part = part[part.input_model.isin(selected_model_names) & part.output_model.isin(selected_model_names)
+                    & (part.input_model != part.output_model)]
+        part = part[pd.to_numeric(part.existing_flag, errors='coerce').isin([0, 1])]
+        part = part[(pd.to_numeric(part.existing_flag) == 0) | part.direct_quote.str.strip().ne('')]
+        for vote in part.to_dict('records'):
+            votes.setdefault((vote['candidate_id'], vote['input_model']), []).append(vote)
+    summaries = []
+    for file in sorted(Path(domain_cfg['composite_dir']).glob(f"{domain_cfg['composite_prefix']}_Q*.xlsx")):
+        frame = read_composite(file)
+        frame = frame.drop(columns=[c for c in frame if c.startswith('flag_') or c.startswith('cross_score') or c == 'item_raw_index'])
+        for name in selected_model_names:
+            frame[f'flag_{name}'] = np.nan
+        frame['cross_score'] = np.nan
+        for index, row in frame.iterrows():
+            cid = candidate_id(row)
+            frame.at[index, 'candidate_id'] = cid
+            matching = votes.get((cid, row['model']), [])
+            if matching and expected_verifiers is None:
+                raise ValueError('current verifier signatures required; run cross/ensemble through CLI')
+            flags = {}
+            for vote in matching:
+                expected = fingerprint(dict(candidate=cid, verifier=expected_verifiers.get(vote['output_model'])))
+                if vote['verification_fingerprint'] != expected:
+                    continue
+                flags[vote['output_model']] = max(flags.get(vote['output_model'], 0), int(vote['existing_flag']))
+            if flags:
+                for name, flag in flags.items():
+                    frame.at[index, f'flag_{name}'] = flag
+                frame.at[index, 'cross_score'] = sum(flags.values())
+        write_dataframe(frame, file)
+        summaries.append(frame.loc[frame['cross_score'].notna(), ['paper_index', 'question_index', 'candidate_id', 'model', 'cross_score']
+                                   + [f'flag_{name}' for name in selected_model_names]])
+    result = pd.concat(summaries, ignore_index=True) if summaries else pd.DataFrame()
+    write_dataframe(result, Path(domain_cfg['crosser_dir']) / 'cross_scores.xlsx')
+    return result

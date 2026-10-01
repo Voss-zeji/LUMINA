@@ -5,48 +5,12 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
-import sys
-import types
 
 import numpy as np
 import pandas as pd
 
-if "langchain.text_splitter" not in sys.modules:
-    text_splitter = types.ModuleType("langchain.text_splitter")
-    text_splitter.MarkdownTextSplitter = object
-    langchain = types.ModuleType("langchain")
-    langchain.text_splitter = text_splitter
-    sys.modules["langchain"] = langchain
-    sys.modules["langchain.text_splitter"] = text_splitter
-
-if "sklearn.metrics.pairwise" not in sys.modules:
-    pairwise = types.ModuleType("sklearn.metrics.pairwise")
-    pairwise.cosine_similarity = lambda *_args, **_kwargs: None
-    metrics = types.ModuleType("sklearn.metrics")
-    metrics.pairwise = pairwise
-    sklearn = types.ModuleType("sklearn")
-    sklearn.metrics = metrics
-    sys.modules["sklearn"] = sklearn
-    sys.modules["sklearn.metrics"] = metrics
-    sys.modules["sklearn.metrics.pairwise"] = pairwise
-
-if "json5" not in sys.modules:
-    json5 = types.ModuleType("json5")
-    json5.loads = lambda _content: {"invalid_syntax": {"value": None}}
-    sys.modules["json5"] = json5
-
-if "tiktoken" not in sys.modules:
-    tiktoken = types.ModuleType("tiktoken")
-    tiktoken.encoding_for_model = lambda _model: SimpleNamespace(encode=lambda _text: [])
-    sys.modules["tiktoken"] = tiktoken
-
-if "openai" not in sys.modules:
-    openai = types.ModuleType("openai")
-    openai.OpenAI = object
-    sys.modules["openai"] = openai
-
 import run_pipeline
-from lumina import cross_validation, examiner, llm, preparation
+from lumina import common, cross_validation, examiner, llm, preparation
 
 
 class ChatCapabilityTests(unittest.TestCase):
@@ -57,6 +21,9 @@ class ChatCapabilityTests(unittest.TestCase):
             def __init__(self, **kwargs) -> None:
                 calls["client"] = kwargs
                 self.chat = SimpleNamespace(completions=self)
+
+            def close(self):
+                pass
 
             def create(self, **kwargs):
                 calls["request"] = kwargs
@@ -96,6 +63,7 @@ class PreparationTests(unittest.TestCase):
             pdf_dir = root / "pdfs"
             markdown_dir = root / "markdown"
             pdf_dir.mkdir()
+            (pdf_dir / "01_paper.pdf").write_bytes(b"synthetic conversion fixture")
             calls = []
 
             def convert(pdf_source: str, markdown_target: str) -> list[str]:
@@ -134,14 +102,15 @@ class ExaminerFailureTests(unittest.TestCase):
                 patch.object(examiner, "single_chat", side_effect=RuntimeError("provider unavailable")),
                 patch.object(examiner, "sleep_for_rate_limit"),
             ):
-                examiner.run_examiner_for_domain(
-                    "aqua", domain_cfg, {"model-a": model}, {"provider": {}}, run_cfg
-                )
+                with self.assertRaisesRegex(RuntimeError, "examiner failed"):
+                    examiner.run_examiner_for_domain(
+                        "aqua", domain_cfg, {"model-a": model}, {"provider": {}}, run_cfg
+                    )
 
             self.assertEqual(list(output_dir.rglob("*.csv")), [])
             failures = list(output_dir.rglob("*_invalid.txt"))
             self.assertEqual(len(failures), 3)
-            self.assertTrue(all("LLM_ERROR: provider unavailable" in path.read_text(encoding="utf-8") for path in failures))
+            self.assertTrue(all("provider unavailable" in path.read_text(encoding="utf-8") for path in failures))
 
 
 class CrossValidationTests(unittest.TestCase):
@@ -223,13 +192,16 @@ class CrossValidationTests(unittest.TestCase):
             }
             composite = Path(domain_cfg["composite_dir"]) / "Composite_Q01.xlsx"
             composite.parent.mkdir()
-            composite.touch()
             cache = Path(cross_validation.embedding_file(domain_cfg, "01", 2048, 20))
             cache.parent.mkdir(parents=True)
             np.save(cache, np.array([[1.0, 2.0]]))
             composite_rows = pd.DataFrame(
-                [{"model": "model-a", "evidence": "evidence", "paper_index": 1, "item": "item"}]
+                [{"model": "model-a", "evidence": "evidence", "paper_index": "01", "item": "Study_location",
+                  "value": "China", "confidence_lv": 90, "question_index": 1, "round_index": 1,
+                  "request_fingerprint": "synthetic", "paper_fingerprint": common.fingerprint("paper body")}]
             )
+            composite_rows["candidate_id"] = composite_rows.apply(common.candidate_id, axis=1)
+            composite_rows.to_excel(composite, index=False)
             run_cfg = {"chunk_size": 2048, "overlap_percent": 20, "text_extension": 1, "temperature": 0.01}
             models = {
                 "a": {"model": "provider/model-a"},
@@ -237,20 +209,20 @@ class CrossValidationTests(unittest.TestCase):
             }
 
             with (
-                patch.object(cross_validation.pd, "read_excel", return_value=composite_rows),
                 patch.object(cross_validation, "_chunks_for_paper", return_value=["context"]),
                 patch.object(cross_validation, "embedding_response", return_value=[1.0, 2.0]),
                 patch.object(cross_validation, "cosine_similarity", return_value=np.array([[1.0]])),
                 patch.object(cross_validation, "llm_requery", side_effect=RuntimeError("provider unavailable")),
                 patch.object(cross_validation, "sleep_for_rate_limit"),
             ):
-                cross_validation.cross_validate_domain(
-                    "aqua", domain_cfg, models, {}, {}, run_cfg, ["model-a", "model-b"]
-                )
+                with self.assertRaisesRegex(RuntimeError, "cross failed"):
+                    cross_validation.cross_validate_domain(
+                        "aqua", domain_cfg, models, {}, {}, run_cfg, ["model-a", "model-b"]
+                    )
 
             failures = list((root / "crosser").rglob("*_invalid.txt"))
             self.assertEqual(len(failures), 1)
-            self.assertIn("LLM_ERROR: provider unavailable", failures[0].read_text(encoding="utf-8"))
+            self.assertIn("provider unavailable", failures[0].read_text(encoding="utf-8"))
 
     def test_does_not_treat_a_failed_verifier_as_a_negative_vote(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -8,6 +8,12 @@
 - 经纬度（Longitude/Latitude）集成：在 ensemble_dataframe 中按 precision_digits 先对所有候选 normalized_value 进行统一四舍五入归并，再进行投票选择；support 计数与归并后的结果一致（例如 119.6279/119.628/119.63 在 precision_digits=2 时统一归并为 119.63 再统计）。
 - 其余未提及部分保持不变。
 
+更新日志 (2026-10-01)
+- 缺失值：float('nan') / pd.NA / pd.NaT 以及 "N/A" / "NA" / "none" / "-" 等文本哨兵统一按空值处理，不再被当作文本 token 参与投票。
+- 经纬度：修复带符号负值范围（如 "-74.0 to -73.0"）的负号被当作范围分隔符而丢失的问题；半球后缀（N/S/E/W）与显式负号现在解析一致。
+- Study Period：新增 ISO 日期（YYYY-MM-DD / YYYY-MM）解析，且在按范围连接词拆分之前完成，避免连字符被当作范围分隔符。
+- 其余投票策略（多数空值、并列、precision 归并、day>month>year 精度优先）保持不变。
+
 ensemble_utils_meta.py
 
 对“同一 paper_index + question_index + item 下、不同 model 的 value”进行集成（ensemble）。
@@ -43,16 +49,14 @@ from __future__ import annotations
 
 import re
 import math
-from collections import Counter, defaultdict
+from collections import Counter
 from datetime import date
 from typing import (
     Any,
     Callable,
     Dict,
-    Iterable,
     List,
     Optional,
-    Sequence,
     Tuple,
     Union,
 )
@@ -182,9 +186,64 @@ _MONTH_RANGE_SAME_YEAR_RE = re.compile(
 
 # 简单范围连接词，用于 Study Period 与经纬度共同复用
 _RANGE_SPLIT_RE = re.compile(
-    r"\b(?:to|and|until|through|thru|between)\b|[-–—]",
+    r"\b(?:to|and|until|through|thru|between)\b"
+    # 短横线只在“不可能是负号”时才当范围分隔符：
+    #   紧贴式 "119.5-120.0" / "120.0E-119.5E"：前面是数字/字母，且其后不是正负号；
+    #   带空格 "119.5 - 120.0"：前后都有空格且其后是无符号数字。
+    # 这样 "-74 -73" 不会被切成 "74"/"73"，负号得以保留。
+    r"|(?<=[0-9a-z°'\"”])[-–—](?![-+])"
+    r"|(?<=[0-9a-z°'\"”])\s+[-–—]\s+(?=\d)",
     flags=re.IGNORECASE,
 )
+
+# 简单经纬度范围："119.5-120.0" / "119.5 - 120.0" / "119.5 to 120.0" / "119.5–120.0"。
+# 分隔符整体消费，避免右端点的 [+-]? 把分隔短横线误当作符号。
+# sep 会原样带出分隔符两侧的空白，据此区分 "119.5 - 120.0"（分隔符）
+# 与 "-74 -73"（短横线是 -73 的符号）——见 _split_coord_range_endpoints。
+_COORD_SIMPLE_RANGE_RE = re.compile(
+    r"^\s*(?P<a>[-+]?\d+(?:\.\d+)?)(?:\s*°)?(?P<ha>[NSEW]?)"
+    r"(?P<sep>\s*[-–—]\s*|\s*\b(?:to|and)\b\s*)"
+    r"(?P<b>[-+]?\d+(?:\.\d+)?)(?:\s*°)?\s*(?P<hb>[NSEW]?)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _split_coord_range_endpoints(m: "re.Match") -> Tuple[float, float]:
+    """Keep endpoint signs and shared hemisphere suffixes without changing tight ranges."""
+    sep = m.group("sep")
+    left_txt = m.group("a")
+    right_txt = m.group("b")
+
+    sign = ""
+    if '-' in sep and sep[:1].isspace() and not sep[-1:].isspace() and right_txt[:1] not in '+-':
+        sign = '-'  # Whitespace-separated endpoints: '-74 -73'.
+    values = [float(left_txt), float(sign + right_txt)]
+    ha, hb = m.group('ha').upper(), m.group('hb').upper()
+    shared = ha or hb
+    for index, hemisphere in enumerate([ha or shared, hb or shared]):
+        if hemisphere in {'S', 'W'}:
+            values[index] = -abs(values[index])
+        elif hemisphere in {'N', 'E'}:
+            values[index] = abs(values[index])
+    return values[0], values[1]
+
+# ISO 日期：YYYY-MM-DD / YYYY-MM。"2011-2012" 不会匹配（\d{2} 后的 \b 不成立）。
+_ISO_DATE_RE = re.compile(r"\b(\d{4})-(\d{1,2})(?:-(\d{1,2}))?\b")
+
+# 文本形式的缺失值哨兵（小写比较）
+_MISSING_STRINGS = frozenset(
+    {"", "-", "--", "na", "n/a", "n.a.", "nan", "nat", "none", "null", "nil", "not provided", "not specified"}
+)
+
+
+def _is_missing(value: Any) -> bool:
+    """判断单个 value 是否缺失：None / float NaN / pd.NA / pd.NaT。"""
+    if value is None:
+        return True
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError):
+        return False
 
 
 # =====================
@@ -236,6 +295,17 @@ def _parse_one_token_to_date(token: str) -> Tuple[Optional[date], str]:
     t = token.strip()
     if not t:
         return None, ""
+
+    # ISO 日期优先：YYYY-MM-DD / YYYY-MM（须先于按连接词拆分，否则连字符会被当作范围分隔符）
+    m_iso = _ISO_DATE_RE.search(t)
+    if m_iso:
+        yr = int(m_iso.group(1))
+        mon = int(m_iso.group(2))
+        day = int(m_iso.group(3)) if m_iso.group(3) else 1
+        try:
+            return date(yr, mon, day), ("day" if m_iso.group(3) else "month")
+        except ValueError:
+            return None, ""
 
     # Month DD YYYY
     m = _MONTH_DAY_YEAR_RE.search(t)
@@ -319,8 +389,37 @@ def _merge_blocks_to_period(raw: str) -> Optional[ParsedPeriod]:
                 # 若失败则回到通用逻辑
                 pass
 
+        # 特例：单个 ISO 日期，如 "2011-03-14" / "2011-01"。
+        # 必须先于通用拆分，否则日期内部的连字符会被当成范围分隔符。
+        iso_all = list(_ISO_DATE_RE.finditer(blk))
+        if len(iso_all) == 1 and _ISO_DATE_RE.sub("", blk).strip(" ,.") == "":
+            d, prec = _parse_one_token_to_date(iso_all[0].group(0))
+            if d is not None:
+                starts.append(d)
+                ends.append(d)
+                precisions.append(prec)
+                continue
+
+        # 特例：ISO 日期范围，如 "2011-01-01 to 2011-06-30" / "2011-01-01 - 2011-06-30"。
+        # 必须先于通用拆分，否则日期内部的连字符会被当成范围分隔符。
+        if len(iso_all) >= 2:
+            parsed = []
+            for m in iso_all:
+                d = _parse_one_token_to_date(m.group(0))
+                if d[0] is not None:
+                    parsed.append(d)
+            if len(parsed) >= 2:
+                starts.append(min(p[0] for p in parsed))
+                ends.append(max(p[0] for p in parsed))
+                precisions.append(
+                    "day" if any(p[1] == "day" for p in parsed) else "month"
+                )
+                continue
+
         # 一般性的 range 拆分
         parts = [p.strip() for p in _RANGE_SPLIT_RE.split(blk) if p.strip()]
+        if not parts:
+            continue
         if len(parts) == 1:
             d, p = _parse_one_token_to_date(parts[0])
             if d is not None:
@@ -434,14 +533,14 @@ def _dms_to_decimal(deg: float, minutes: float = 0.0, seconds: float = 0.0) -> f
 
 def _parse_coord_value(s: Union[str, float, int]) -> Optional[float]:
     """将单一经纬度字符串解析为十进制度数（不处理范围）。"""
-    if s is None:
+    if _is_missing(s):
         return None
     if isinstance(s, (int, float)):
         v = float(s)
         return v if not math.isnan(v) else None
 
     txt = str(s).strip()
-    if not txt:
+    if not txt or txt.lower() in _MISSING_STRINGS:
         return None
 
     txt = txt.replace("。", ".").replace("．", ".")
@@ -494,7 +593,7 @@ def _parse_coord_interval(s: Union[str, float, int]) -> Optional[Tuple[float, fl
     - 若为范围（如 "119.5°–120.0°" / "119°30'00\"E to 120°00'00\"E"），
       用 _RANGE_SPLIT_RE 拆分并分别解析端点。
     """
-    if s is None:
+    if _is_missing(s):
         return None
     if isinstance(s, (int, float)):
         v = float(s)
@@ -503,21 +602,18 @@ def _parse_coord_interval(s: Union[str, float, int]) -> Optional[Tuple[float, fl
         return v, v
 
     txt = str(s).strip()
-    if not txt:
+    if not txt or txt.lower() in _MISSING_STRINGS:
         return None
 
-    txt = txt.replace("。", ".").replace("．", ".")
-    txt = txt.replace("′", "'").replace("″", '"')
-    txt = _EN_DASHES_RE.sub("-", txt)
-
-    # 简单形如 "119.5-120.0" 的范围
-    m_simple = re.match(
-        r"^\s*([-+]?\d+(?:\.\d+)?)°?\s*-\s*([-+]?\d+(?:\.\d+)?)°?\s*[NSEWnsew]?\s*$",
-        txt,
-    )
+    # Preserve en/em dash range markers; unlike ASCII '-', they are not endpoint signs.
+    txt = txt.replace('。', '.').replace('．', '.').replace('′', "'").replace('″', '"')
+    txt = _EN_DASHES_RE.sub(lambda m: m.group(0) if m.group(0) in {'–', '—'} else '-', txt)
+    # 简单形如 "119.5-120.0" / "-74.0 to -73.0" 的范围。
+    # 必须整体消费分隔符：若把 "-" 留在两个数字之间，右端点的 [+-]? 会把
+    # 分隔符当成第二个端点的符号（"-74 -73" → "-74","73"，负号丢失）。
+    m_simple = _COORD_SIMPLE_RANGE_RE.match(txt)
     if m_simple:
-        v1 = float(m_simple.group(1))
-        v2 = float(m_simple.group(2))
+        v1, v2 = _split_coord_range_endpoints(m_simple)
         return (min(v1, v2), max(v1, v2))
 
     parts = [p.strip() for p in _RANGE_SPLIT_RE.split(txt) if p.strip()]
@@ -785,11 +881,12 @@ def _normalize_single_value(
     - 对 Longitude / Latitude：解析为区间，并格式化输出；
     - 对文本类：去除括号、停用词等，返回标准化 token 串。
     """
-    if value is None:
+    if _is_missing(value):
         return ""
 
     s = str(value).strip()
-    if not s:
+    # 文本哨兵（"N/A" / "NA" / "none" / "-" 等）与真正的缺失值同等对待
+    if s.lower() in _MISSING_STRINGS:
         return ""
 
     cat = _detect_item_category(item_name)
@@ -859,7 +956,7 @@ def _ensemble_group(
         periods: List[ParsedPeriod] = []
         idx_map: List[int] = []
         for i, v in enumerate(raw_values):
-            p = _merge_blocks_to_period(str(v)) if v not in (None, "") else None
+            p = None if _is_missing(v) else _merge_blocks_to_period(str(v))
             if p is not None:
                 periods.append(p)
                 idx_map.append(i)

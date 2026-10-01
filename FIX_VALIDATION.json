@@ -1,0 +1,109 @@
+{
+  "base_commit": "71111c201d3d652d4237c3fc9f2d96f1208f6533",
+  "scope": "Engineering/data repairs; scientific policies preserved",
+  "python_version": "3.12.13",
+  "tests": {
+    "command": "python -B -m unittest discover -s tests -v",
+    "count": 132,
+    "result": "passed"
+  },
+  "static_checks": "ruff isolated E9,F63,F7,F82,F401,F811 and git diff --check: passed",
+  "runtime": [
+    {
+      "name": "help",
+      "exit_code": 0
+    },
+    {
+      "name": "real_dependency_imports",
+      "exit_code": 0
+    },
+    {
+      "name": "aqua",
+      "exit_code": 0,
+      "ensemble_files": 12,
+      "sidecars": 0,
+      "api_counts": {
+        "examiner": 6,
+        "verifier": 6,
+        "embedding": 7
+      }
+    },
+    {
+      "name": "aqua_resume",
+      "exit_code": 0,
+      "api_counts": {
+        "examiner": 0,
+        "verifier": 0,
+        "embedding": 0
+      }
+    },
+    {
+      "name": "wildfire",
+      "exit_code": 0,
+      "ensemble_files": 16,
+      "sidecars": 0,
+      "api_counts": {
+        "examiner": 8,
+        "verifier": 8,
+        "embedding": 9
+      }
+    },
+    {
+      "name": "wildfire_resume",
+      "exit_code": 0,
+      "api_counts": {
+        "examiner": 0,
+        "verifier": 0,
+        "embedding": 0
+      }
+    },
+    {
+      "name": "aqua_failure",
+      "exit_code": 1,
+      "ensemble_files": 0,
+      "sidecars": 6
+    }
+  ],
+  "independent_review": {
+    "important_findings_identified": 2,
+    "resolved": 2,
+    "targeted_rereview": "no remaining critical/important finding"
+  },
+  "scientific_policy_changes": false,
+  "real_api_calls": false,
+  "real_pdf_or_research_data_processed": false,
+  "dependency_versions": {
+    "pandas": "3.0.6",
+    "numpy": "2.5.3",
+    "openai": "3.22.1",
+    "json5": "0.15.0",
+    "langchain-text-splitters": "1.1.2",
+    "scikit-learn": "1.9.1",
+    "openpyxl": "3.1.5"
+  },
+  "reviewed_git_blob_ids": {
+    "config.example.py": "608310383c26f11035fc7e1187bc65b0b0593960",
+    "lumina/__init__.py": "75ec2bb47d4ee96b10b8564026115a6e455a79fb",
+    "lumina/common.py": "f0ceb56a72efa18e171efe2ca3bd91c21a477fad",
+    "lumina/composite.py": "88c64032aeb39781469b492b6254838f16704f99",
+    "lumina/cross_validation.py": "92f114519b31b13e8439270081a2eb3c232e58cf",
+    "lumina/ensemble.py": "9bbf8634503afe17863317056a3ef4b7431fb03e",
+    "lumina/ensemble_utils_meta.py": "d7716f955e9b2a6ae7d34ee201444a2d71df9d45",
+    "lumina/ensemble_utils_value.py": "1bd89726c3a1e8dc97c09f555e97504f5a1f130e",
+    "lumina/examiner.py": "928ff93bb2e3aeba80c10769f18c0ea425eef62b",
+    "lumina/llm.py": "7c1a10792e6c5f53605780b61e5f5e4b8333e9bb",
+    "lumina/preparation.py": "ee2ebb377059f550c012e43b08f211609f106dd6",
+    "lumina/prepare.py": "4c33eb05865b1aa76d1ec648d5d81f7ff6d8cdaf",
+    "lumina/prompts.py": "9790584ae98393d8ff5d10fc8fa715f6d1b2fc47",
+    "lumina/utils.py": "2c46e10a08ac4a3f17af75f3b7bc5a1ba9c2bfb8",
+    "requirements.txt": "f4be2b1a13311f3f9df75a0a3d9225d16ad3c041",
+    "run_pipeline.py": "b9472f46ba17780b4f69d76aec9d1dc0fe053e73",
+    "tests/test_api_regressions.py": "e9eeb7018662463f4576c62d8d0c3f1f15a0156f",
+    "tests/test_contract_regressions.py": "d65088ebca06c2e63dce91a26dc477a532861b6e",
+    "tests/test_meta_regressions.py": "15a488beb2320e9e248b9214848ecdbae658a490",
+    "tests/test_numeric_regressions.py": "4365feb33055b17e2536c970e178877838c5f5de",
+    "tests/test_pipeline_integration.py": "fdfed488c622bc8b650a2c7d388883688a3f805d",
+    "tests/test_pipeline_safeguards.py": "054092a67eb192227cb34767387664803f0e06f4",
+    "tests/test_preparation_regressions.py": "da362a93a6e4a0b1451acb60ba1f7a84661e9363"
+  }
+}
