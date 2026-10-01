@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from contextlib import nullcontext
 from pathlib import Path
 
 import pandas as pd
@@ -39,13 +40,18 @@ def run_llm_prompt_mode(
     domain: str,
     round_index=1,
     temperature=0.01,
+    runtime=None,
 ):
     messages = [
         {"role": "system", "content": prompts.message_system_v2.format(domain=domain)},
         {"role": "user", "content": prompts.message_system_v2_output.format(content=text)},
         {"role": "user", "content": question.strip("\n")},
     ]
-    return single_chat(llm, llm_settings, messages, temperature=temperature)
+    # Without a control layer the legacy call signature stays untouched, so an
+    # externally patched single_chat keeps its old signature.
+    if runtime is None:
+        return single_chat(llm, llm_settings, messages, temperature=temperature)
+    return single_chat(llm, llm_settings, messages, temperature=temperature, runtime=runtime)
 
 
 # Parse the LLM's JSON response into a DataFrame
@@ -106,37 +112,62 @@ def expected_tasks(domain: str, domain_cfg: dict, llm_dicts: dict, llm_settings:
 #   4. On request or parse failure: save raw text to _invalid.txt and leave the task resumable
 #   5. Sleep for rate limiting (59s for low-limit, 1s for high-limit)
 #   6. Save CSV with metadata columns (paper_index, model, tokens, time, question_index)
-def run_examiner_for_domain(domain: str, domain_cfg: dict, llm_dicts: dict, llm_settings: dict, run_cfg: dict) -> None:
+def run_examiner_for_domain(domain: str, domain_cfg: dict, llm_dicts: dict, llm_settings: dict,
+                            run_cfg: dict, runtime=None) -> None:
     failed = 0
     for output, metadata, text, llm_key, llm, question in domain_tasks(domain, domain_cfg, llm_dicts, llm_settings, run_cfg):
         paper, q_idx = metadata["paper_index"], metadata["question_index"]
+        # The core check knows the science; runtime.valid proves the files still match the
+        # ledger hashes.  Both must hold before a paid task is skipped.
+        key = None if runtime is None else runtime.key(
+            "examiner", paper, q_idx, source_model=llm["model"], round_index=run_cfg["round_index"])
         if Path(output).exists() and _successful_output(output, metadata, domain):
-            print(f"Paper {paper} | {llm_key} - Question {q_idx} ... exists")
-            continue
+            if runtime is None or runtime.valid(key):
+                if runtime is not None:
+                    runtime.completed(key, [output, Path(output).with_suffix(".meta.json")], cached=True)
+                print(f"Paper {paper} | {llm_key} - Question {q_idx} ... exists")
+                continue
+            # Metadata is sound but the artifact changed: rebuild from the cached paid
+            # response through the transport instead of trusting the edited file.
+            print(f"Paper {paper} | {llm_key} - Question {q_idx} ... artifact changed, rebuilding")
         # Sidecars retain canonical identities; filenames are display tokens only.
         save_json(Path(output).with_suffix(".meta.json"), metadata)
         start, raw = time.time(), None
-        try:
-            raw, token = run_llm_prompt_mode(llm, llm_settings, text, paper, q_idx, question,
-                domain_cfg["domain_knowledge"], round_index=run_cfg["round_index"], temperature=run_cfg["temperature"])
-            result = _df_from_result(raw)
-            validate_answers(result, domain, q_idx)
-        except Exception as exc:
-            failed += 1
-            detail = error_details(exc, llm_settings)
-            write_invalid_text(output, f"ERROR {detail}\nRAW: {raw}" if raw is None else raw)
-            print(f"Paper {paper} | {llm_key} - Question {q_idx} ... failed: {detail}")
-            continue
-        for key, value in metadata.items():
-            result[key] = value
-        result["total_tokens"] = token
-        result["time_consumption"] = time.time() - start
-        emission = prompts.emission_type_for_question(domain, q_idx)
-        if emission:
-            result["emission_type"] = emission
-        write_dataframe(result, output)
-        invalid_path(output).unlink(missing_ok=True)
-        sleep_for_rate_limit(llm)
-        print(f"Paper {paper} | {llm_key} - Question {q_idx} ... finished")
+        scope = nullcontext() if runtime is None else runtime.task_scope(key)
+        with scope:
+            try:
+                prompt_kwargs = dict(round_index=run_cfg["round_index"],
+                                     temperature=run_cfg["temperature"])
+                if runtime is not None:
+                    prompt_kwargs["runtime"] = runtime
+                raw, token = run_llm_prompt_mode(llm, llm_settings, text, paper, q_idx, question,
+                    domain_cfg["domain_knowledge"], **prompt_kwargs)
+                result = _df_from_result(raw)
+                validate_answers(result, domain, q_idx)
+            except Exception as exc:
+                if runtime is not None:
+                    runtime.reraise_control(exc)  # pause/budget/unknown stops must not be swallowed
+                failed += 1
+                detail = error_details(exc, llm_settings)
+                write_invalid_text(output, f"ERROR {detail}\nRAW: {raw}" if raw is None else raw)
+                if runtime is not None:
+                    # The scope cannot record a failure we swallow here; do it explicitly
+                    # so the logical task is not left pending forever.
+                    runtime.failed(key, detail)
+                print(f"Paper {paper} | {llm_key} - Question {q_idx} ... failed: {detail}")
+                continue
+            for name, value in metadata.items():
+                result[name] = value
+            result["total_tokens"] = token
+            result["time_consumption"] = time.time() - start
+            emission = prompts.emission_type_for_question(domain, q_idx)
+            if emission:
+                result["emission_type"] = emission
+            write_dataframe(result, output)
+            invalid_path(output).unlink(missing_ok=True)
+            if runtime is not None:
+                runtime.completed(key, [output, Path(output).with_suffix(".meta.json")])
+            sleep_for_rate_limit(llm, **({} if runtime is None else {"runtime": runtime}))
+            print(f"Paper {paper} | {llm_key} - Question {q_idx} ... finished")
     if failed:
         raise RuntimeError(f"examiner failed: {failed} tasks; inspect *_invalid.txt and rerun")

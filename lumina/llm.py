@@ -7,7 +7,10 @@ import requests
 from openai import OpenAI
 
 
-def single_chat(llm: dict, llm_settings: dict, message_input: list[dict], temperature=0.01):
+def single_chat(llm: dict, llm_settings: dict, message_input: list[dict], temperature=0.01, runtime=None):
+    # The control layer owns every paid request; delegate before touching a provider.
+    if runtime is not None:
+        return runtime.chat(llm, llm_settings, message_input, temperature)
     provider = llm_settings[llm["source"]]
     if not provider.get('key') or not provider.get('url'):
         raise ValueError('chat provider requires an explicit nonempty key and URL')
@@ -36,7 +39,9 @@ def single_chat(llm: dict, llm_settings: dict, message_input: list[dict], temper
         client.close()
 
 
-def embedding_response(text: str, embedding_model: dict, llm_settings: dict):
+def embedding_response(text: str, embedding_model: dict, llm_settings: dict, runtime=None):
+    if runtime is not None:
+        return runtime.embedding(text, embedding_model, llm_settings)
     if not llm_settings[embedding_model['source']].get('key'):
         raise ValueError('embedding provider key missing')
     payload = {"model": embedding_model["model"], "input": str(text), "encoding_format": "float"}
@@ -71,7 +76,13 @@ def embedding_response(text: str, embedding_model: dict, llm_settings: dict):
         time.sleep(2 ** attempt)
 
 
-def llm_requery(llm: dict, llm_settings: dict, system_settings: str, prompt_rag: str, temperature=0.01):
+def llm_requery(llm: dict, llm_settings: dict, system_settings: str, prompt_rag: str, temperature=0.01,
+                runtime=None):
+    if runtime is not None:
+        return runtime.chat(llm, llm_settings, [
+            {"role": "system", "content": system_settings},
+            {"role": "user", "content": prompt_rag},
+        ], temperature)
     messages = [
         {"role": "system", "content": system_settings},
         {"role": "user", "content": prompt_rag},

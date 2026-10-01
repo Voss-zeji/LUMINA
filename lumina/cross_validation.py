@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import time
+from contextlib import nullcontext
 
 import numpy as np
 import pandas as pd
@@ -60,28 +61,46 @@ def _valid_vectors(array, count: int) -> bool:
 
 
 def _paper_embeddings(domain_cfg: dict, paper: str, chunks: list[str], embedding_model: dict,
-                      llm_settings: dict, run_cfg: dict) -> np.ndarray:
+                      llm_settings: dict, run_cfg: dict, runtime=None) -> np.ndarray:
     if not chunks:
         raise ValueError(f'empty chunks for Paper {paper}')
     output = Path(embedding_file(domain_cfg, paper, run_cfg['chunk_size'], run_cfg['overlap_percent']))
+    meta_file = output.with_suffix('.meta.json')
+    key = None if runtime is None else runtime.key('embeddings', paper,
+                                                    source_model=embedding_model['model'],
+                                                    round_index=run_cfg['round_index'])
     signature = fingerprint(dict(spec=_embedding_spec(embedding_model, llm_settings, run_cfg), chunks=chunks))
-    metadata = load_json(output.with_suffix('.meta.json')) if output.with_suffix('.meta.json').exists() else None
+    metadata = load_json(meta_file) if meta_file.exists() else None
     cached = load_embeddings(str(output))
     if metadata and metadata.get('fingerprint') == signature and _valid_vectors(cached, len(chunks)):
         if metadata.get('dimensions') == cached.shape[1]:
-            return cached
-    vectors = np.array([embedding_response(chunk, embedding_model, llm_settings) for chunk in chunks], dtype=float)
-    if not _valid_vectors(vectors, len(chunks)):
-        raise ValueError(f'invalid embedding shape/numbers for Paper {paper}')
-    save_embeddings(str(output), vectors)
-    save_json(output.with_suffix('.meta.json'), dict(fingerprint=signature, dimensions=vectors.shape[1], chunks=len(chunks)))
+            # Reusable only when the science matches AND the ledger still vouches for the
+            # bytes; otherwise rebuild from cached per-chunk receipts without new API calls.
+            if runtime is None or runtime.valid(key):
+                if runtime is not None:
+                    runtime.completed(key, [str(output), str(meta_file)], cached=True)
+                return cached
+            print(f'Paper {paper}: embedding matrix changed, rebuilding from cached chunk receipts')
+    scope = nullcontext() if runtime is None else runtime.task_scope(key)
+    transport = {} if runtime is None else {"runtime": runtime}
+    with scope:
+        vectors = np.array([embedding_response(chunk, embedding_model, llm_settings, **transport)
+                            for chunk in chunks], dtype=float)
+        if not _valid_vectors(vectors, len(chunks)):
+            raise ValueError(f'invalid embedding shape/numbers for Paper {paper}')
+        save_embeddings(str(output), vectors)
+        save_json(meta_file, dict(fingerprint=signature, dimensions=vectors.shape[1], chunks=len(chunks)))
+        if runtime is not None:
+            runtime.completed(key, [str(output), str(meta_file)])
     return vectors
 
 
-def generate_embeddings_for_domain(domain_cfg: dict, embedding_model: dict, llm_settings: dict, run_cfg: dict) -> None:
+def generate_embeddings_for_domain(domain_cfg: dict, embedding_model: dict, llm_settings: dict,
+                                    run_cfg: dict, runtime=None) -> None:
+    transport = {} if runtime is None else {"runtime": runtime}
     for paper, path in paper_markdowns(domain_cfg['markdown_dir']).items():
         chunks = _chunks_for_paper(str(path), run_cfg)
-        _paper_embeddings(domain_cfg, paper, chunks, embedding_model, llm_settings, run_cfg)
+        _paper_embeddings(domain_cfg, paper, chunks, embedding_model, llm_settings, run_cfg, **transport)
         print(f'embedded Paper {paper} ({len(chunks)} chunks)')
 
 
@@ -114,9 +133,13 @@ def _successful_cross_output(output_file: Path, expected: str | None = None) -> 
 
 
 def cross_validate_domain(domain: str, domain_cfg: dict, llm_dicts: dict, llm_settings: dict,
-                          embedding_model: dict, run_cfg: dict, selected_model_names: list[str]) -> None:
+                          embedding_model: dict, run_cfg: dict, selected_model_names: list[str],
+                          runtime=None) -> None:
     papers = paper_markdowns(domain_cfg['markdown_dir'])
     signatures = verifier_signatures(llm_dicts, llm_settings, embedding_model, run_cfg)
+    # Composite rows carry the short display name; task identity needs the full model ID.
+    full_ids = {model_name(llm): llm['model'] for llm in llm_dicts.values()}
+    transport = {} if runtime is None else {'runtime': runtime}
     prepared = {}
     failed = []
     for question_index in range(1, len(prompts.questions_for_domain(domain)) + 1):
@@ -142,16 +165,31 @@ def cross_validate_domain(domain: str, domain_cfg: dict, llm_dicts: dict, llm_se
                 verification = fingerprint(dict(candidate=cid, verifier=signatures[output_model]))
                 output = (Path(domain_cfg['crosser_dir']) / f'Paper_{paper}' / f'Q{question_index:02d}' /
                           f"Candidate_{cid}==Output_{filename_token(output_model)}.csv")
-                if not _successful_cross_output(output, verification):
-                    pending.append((llm, output_model, output, verification))
+                verifier_key = None if runtime is None else runtime.key(
+                    'cross', paper, question_index, source_model=full_ids.get(input_model, input_model),
+                    verifier_model=llm['model'], round_index=run_cfg['round_index'], candidate=cid)
+                if _successful_cross_output(output, verification):
+                    # A sound CSV whose bytes still match the ledger needs no new paid vote.
+                    if runtime is None or runtime.valid(verifier_key):
+                        if runtime is not None:
+                            runtime.completed(verifier_key, [str(output)], cached=True)
+                        continue
+                pending.append((llm, output_model, output, verification, verifier_key))
             if not pending:
                 continue  # Do not pay for evidence embeddings on an unchanged resume.
             if paper not in prepared:
                 chunks = _chunks_for_paper(str(papers[paper]), run_cfg)
-                vectors = _paper_embeddings(domain_cfg, paper, chunks, embedding_model, llm_settings, run_cfg)
+                vectors = _paper_embeddings(domain_cfg, paper, chunks, embedding_model, llm_settings,
+                                            run_cfg, **transport)
                 prepared[paper] = (chunks, vectors)
             chunks, vectors = prepared[paper]
-            description = np.asarray(embedding_response(evidence, embedding_model, llm_settings), dtype=float)
+            evidence_key = None if runtime is None else runtime.key(
+                'evidence_embedding', paper, question_index,
+                source_model=full_ids.get(input_model, input_model),
+                round_index=run_cfg['round_index'], candidate=cid)
+            with nullcontext() if runtime is None else runtime.task_scope(evidence_key):
+                description = np.asarray(
+                    embedding_response(evidence, embedding_model, llm_settings, **transport), dtype=float)
             if description.ndim != 1 or len(description) != vectors.shape[1] or not np.isfinite(description).all() or np.linalg.norm(description) == 0:
                 raise ValueError(f'Paper {paper}: evidence vector incompatible with cached embedding model')
             similarities = cosine_similarity(description.reshape(1, -1), vectors)[0]
@@ -160,32 +198,42 @@ def cross_validate_domain(domain: str, domain_cfg: dict, llm_dicts: dict, llm_se
             if type(extension) is not int or extension < 0:
                 raise ValueError('text_extension must be a nonnegative integer')
             context = '\n\n'.join(chunks[max(0, chunk_id - extension):chunk_id + extension + 1])
-            for llm, output_model, output, verification in pending:
-                start, raw = time.time(), None
-                try:
-                    raw, token = llm_requery(llm, llm_settings, prompts.message_system_ragQuery.strip(),
-                        prompts.checker_requery.format(answer=evidence, context=context, key_topic=row['item']).strip(),
-                        temperature=run_cfg['temperature'])
-                    result = refineJsonString(raw)
-                    if result.get('existing_flag') not in (0, 1) or not isinstance(result.get('direct_quote'), (str, type(None))):
-                        raise ValueError('verifier requires existing_flag 0/1 and scalar direct_quote')
-                    if result['existing_flag'] == 1 and not (result['direct_quote'] or '').strip():
-                        raise ValueError('positive verifier vote requires a nonempty direct_quote')
-                    # Keep existence checking, not a new numeric/unit fact-checking task.
-                    result = dict(existing_flag=int(result['existing_flag']), direct_quote=result['direct_quote'])
-                except Exception as exc:
-                    detail = error_details(exc, llm_settings)
-                    failed.append(f'Paper {paper} Q{question_index} {input_model}->{output_model}: {detail}')
-                    write_invalid_text(output, f'ERROR {detail}\nRAW: {raw}')
-                    result, token = dict(existing_flag=-1, direct_quote=None), None
-                else:
-                    invalid_path(output).unlink(missing_ok=True)
-                result.update(paper_index=paper, question_index=question_index, item_raw_index=all_index,
+            for llm, output_model, output, verification, verifier_key in pending:
+                with nullcontext() if runtime is None else runtime.task_scope(verifier_key):
+                    start, raw = time.time(), None
+                    try:
+                        query_kwargs = {'temperature': run_cfg['temperature'], **transport}
+                        raw, token = llm_requery(llm, llm_settings, prompts.message_system_ragQuery.strip(),
+                            prompts.checker_requery.format(answer=evidence, context=context, key_topic=row['item']).strip(),
+                            **query_kwargs)
+                        result = refineJsonString(raw)
+                        if result.get('existing_flag') not in (0, 1) or not isinstance(result.get('direct_quote'), (str, type(None))):
+                            raise ValueError('verifier requires existing_flag 0/1 and scalar direct_quote')
+                        if result['existing_flag'] == 1 and not (result['direct_quote'] or '').strip():
+                            raise ValueError('positive verifier vote requires a nonempty direct_quote')
+                        # Keep existence checking, not a new numeric/unit fact-checking task.
+                        result = dict(existing_flag=int(result['existing_flag']), direct_quote=result['direct_quote'])
+                    except Exception as exc:
+                        if runtime is not None:
+                            runtime.reraise_control(exc)  # never let a control stop become a -1 vote
+                        detail = error_details(exc, llm_settings)
+                        failed.append(f'Paper {paper} Q{question_index} {input_model}->{output_model}: {detail}')
+                        if runtime is not None:
+                            # Explicitly failed, not a -1 vote: an API error is not evidence.
+                            runtime.failed(verifier_key, detail)
+                        write_invalid_text(output, f'ERROR {detail}\nRAW: {raw}')
+                        result, token = dict(existing_flag=-1, direct_quote=None), None
+                    else:
+                        invalid_path(output).unlink(missing_ok=True)
+                    result.update(paper_index=paper, question_index=question_index, item_raw_index=all_index,
                               candidate_id=cid, input_model=input_model, output_model=output_model,
                               verification_fingerprint=verification, evaluate_token=token,
                               time_consumption=time.time() - start, max_similarities=float(similarities[chunk_id]))
-                write_dataframe(pd.DataFrame([result]), output)
-                sleep_for_rate_limit(llm, low_limit_seconds=5, high_limit_seconds=.1)
+                    write_dataframe(pd.DataFrame([result]), output)
+                    # Only a real 0/1 vote is a finished task; a -1 API failure is not.
+                    if runtime is not None and int(result['existing_flag']) in (0, 1):
+                        runtime.completed(verifier_key, [str(output)])
+                    sleep_for_rate_limit(llm, low_limit_seconds=5, high_limit_seconds=.1, **transport)
     if failed:
         raise RuntimeError('cross failed: ' + '; '.join(failed))
 

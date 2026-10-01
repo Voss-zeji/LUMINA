@@ -7,3 +7,10 @@ output/
 .env
 .venv/
 venv/
+runs/
+gold/
+research.json
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
