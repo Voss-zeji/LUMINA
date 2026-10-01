@@ -336,7 +336,7 @@ class TestEvaluateRun(unittest.TestCase):
                 evaluate_run(run, output_dir=str(ancestor))
         # A sibling under the shared parent stays the normal, allowed case.
         sibling = self.root / "sibling-evals"
-        self.assertEqual(evaluate_run(run, output_dir=str(sibling))["output_dir"], str(sibling))
+        self.assertEqual(evaluate_run(run, output_dir=str(sibling))["output_dir"], str(sibling.resolve()))
         self.assertTrue((sibling / "evaluation_report.json").is_file())
         if hasattr(os, "symlink"):
             try:
@@ -648,7 +648,7 @@ class TestProductionShapedRegressions(unittest.TestCase):
         before = _hash_tree(run)
         target = self.root / "out"
         accepted = evaluation_module._output_dir(run, str(target))
-        self.assertEqual(accepted, target)
+        self.assertEqual(accepted, target.resolve())
         if not self._junction(target, run):
             self.skipTest("NTFS junction creation is unavailable in this environment")
         try:
