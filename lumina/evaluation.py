@@ -658,6 +658,7 @@ def _conflicts_with_run(run: Path, target: Path) -> bool:
     directory production lives in. A *sibling* under a shared parent is the normal,
     allowed case, so the comparison is on ancestry rather than on the parent alone.
     """
+    run, target = run.resolve(), target.resolve()
     return target == run or target.is_relative_to(run) or run.is_relative_to(target)
 
 

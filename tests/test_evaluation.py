@@ -659,6 +659,15 @@ class TestProductionShapedRegressions(unittest.TestCase):
         finally:
             _remove_alias(target)
 
+    def test_write_guard_resolves_the_run_path_as_well_as_the_target(self):
+        run = _RunFixture.build(self.root, _RunFixture.standard_rows())
+        detour = self.root / "detour"
+        detour.mkdir()
+        alternate_spelling = detour / ".." / run.name
+        self.assertEqual(alternate_spelling.resolve(), run.resolve())
+        with self.assertRaises(ValueError):
+            evaluation_module._assert_writable_outside(alternate_spelling, run)
+
     def test_junction_to_the_runs_parent_is_still_an_ancestor_and_refused(self):
         """Finding 5: resolving either side is what makes the ancestor rule hold."""
         run = _RunFixture.build(self.root, _RunFixture.standard_rows())

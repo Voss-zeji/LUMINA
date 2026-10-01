@@ -43,7 +43,15 @@
     "root_cause": [
       "Windows PowerShell junction fixtures invoked on Linux",
       "artifact-order-dependent test read a binary workbook as UTF-8"
-    ]
+    ],
+    "windows_followup": {
+      "log": "E:\\literatures\\temporary_llm_tasking\\agent-path-guard-validation-20261002.log",
+      "root_cause": "Windows 8.3 path spellings in private write guard comparison",
+      "local_tests": 45,
+      "exit_code": 0,
+      "run": "https://github.com/Voss-zeji/LUMINA/actions/runs/36913919125",
+      "fix": "resolve run and target before containment comparison"
+    }
   },
   "goal8": "Missing user-selected papers, endpoint configuration, model/pricing, budgets and resource authorization; separate batch approval required",
   "code_sha256": {
@@ -66,7 +74,7 @@
     "lumina/ensemble_utils_meta.py": "d723f689550810cd7351ac2cf051d51ce19aec9f26ee1245e5fbf384b4aafa87",
     "lumina/ensemble_utils_value.py": "fcf2be92dc5a9c54241a03342a07a9018849cf82ce0bc3c2c5f2373e29acd259",
     "lumina/ensemble.py": "2487705a88eabcf1021f238f9b46c9eab954d201ba9a54b33eb2ff627e67d1b4",
-    "lumina/evaluation.py": "df1f817d2ea419eb01102a3436e54023d10dad1c3c1f59a507039ff41f038cc9",
+    "lumina/evaluation.py": "f45b19effe9f6a5233ef80e9497590df9cf9e43ff33f2d7566d0342e0bf5f92b",
     "lumina/examiner.py": "7b64b5a287d3dcb77afc277af1adb17a9ce3db65c356c5b5e25c24023a20549f",
     "lumina/llm.py": "76fcd5164a682371d6b114892d8f47fc5bde536003d7409a9ed9de332aec61be",
     "lumina/preparation.py": "86ef44bb1f87bbb7e262ce9778563d0cb06f2881171c73ff1e2adf7696e12c36",

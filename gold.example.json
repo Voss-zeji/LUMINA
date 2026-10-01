@@ -1,0 +1,37 @@
+{
+  "protocol": "synthetic",
+  "reference_provenance": "Invented schema demonstration only; replace with independently prepared reference provenance before any scientific evaluation.",
+  "records": [
+    {
+      "kind": "text",
+      "paper_uid": "pExample",
+      "question": 1,
+      "item": "Study_location",
+      "variant": "00_full",
+      "round": 1,
+      "value": "Example location"
+    },
+    {
+      "kind": "numeric",
+      "paper_uid": "pExample",
+      "question": 3,
+      "item": "Flux-1",
+      "variant": "00_full",
+      "round": 1,
+      "experiment_id": "example-experiment-A",
+      "unit": "mg m-2 h-1",
+      "value": "12.5"
+    },
+    {
+      "kind": "numeric",
+      "paper_uid": "pExample",
+      "question": 3,
+      "item": "Flux-1",
+      "variant": "MiniCross01",
+      "round": 1,
+      "experiment_id": "example-experiment-A",
+      "unit": "mg m-2 h-1",
+      "value": "12.5"
+    }
+  ]
+}

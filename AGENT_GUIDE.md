@@ -189,6 +189,10 @@ smoke 和 batch 用的是同一套逻辑任务身份，所以 smoke 里已经完
 
 评价结果写在运行目录之外（默认 `runs/evaluations/<run_id>/`），并记录评价前后生产文件的哈希。模型之间的一致不等于科学正确；合成参照只证明评价软件能跑，不证明科学准确率。
 
+参照格式见 [gold.example.json](gold.example.json)：顶层包含 `protocol`、非空的 `reference_provenance` 和 `records`。示例的值和身份都是虚构的，不能用作真实金标准。每条记录需要 `paper_uid`（从 manifest 复制）、正整数 `question` 和 `round`、`item`、`variant`、`kind` 和 `value`；数值记录还需要可证明的 `experiment_id` 与显式 `unit`。变体名称使用输出目录名 `00_full` 或 `MiniCross01` 等，不能写成文件标签 `full`。
+
+同一参照量若要比较不同阈值，应为要评价的变体分别列出同一人工参考值。评价的 `per_context` 按论文、问题、项目、实验、轮次与变体提供结果，可据此检查 full 与不同阈值的敏感性；它只比较生产结果，不重跑或修改科学规则。原文确认没有所需量时，参考记录使用 `status: "not_reported"`；参考中的 `parse_failure`、`missing_extraction`、`filtered_by_policy` 是未决诊断，不能充当科学真值或得到正确缺失分数。没有生产记录也不自动等于原文未报告。
+
 ## 11. 产物与报告
 
 控制层为每次运行建独立目录 `runs/<run_id>/`：
@@ -234,4 +238,5 @@ runs/<run_id>/
 - LUMINA_AGENTIC_WORKFLOW.md：科学流程与控制层的实现现状。
 - AGENT_GUIDE.md（本文件）：控制层的操作手册。
 - research.example.json：研究规格模板（占位符未填时不可运行）。
+- gold.example.json：虚构参照格式示例，供准备独立参考与阈值比较使用。
 - LUMINA_AGENTIC_PLAN_AND_GOALS.md：唯一的 Goal 与验收台账，正式状态以它为准。
