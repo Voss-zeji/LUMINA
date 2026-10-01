@@ -301,7 +301,7 @@ class ReportTests(unittest.TestCase):
         run = self.finish(self.root)
         qc = json.loads((run / "checkpoints" / "final_qc.json").read_text(encoding="utf-8"))
         target = run / qc["outputs"][0]["path"]
-        target.write_text(target.read_text(encoding="utf-8") + "tampered", encoding="utf-8")
+        target.write_bytes(target.read_bytes() + b"tampered")
         report = self.report(run, final_qc=qc)
         archived = report["archived_qc"]
         self.assertEqual(archived["claimed_passed"], True)

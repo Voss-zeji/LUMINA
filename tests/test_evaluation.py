@@ -29,6 +29,24 @@ from lumina import evaluation as evaluation_module
 from lumina.evaluation import evaluate_records, evaluate_run
 
 
+def _directory_alias(link: Path, target: Path) -> bool:
+    if os.name != "nt":
+        link.symlink_to(target, target_is_directory=True)
+        return True
+    safe_link = str(link).replace("'", "''")
+    safe_target = str(target).replace("'", "''")
+    script = f"New-Item -ItemType Junction -Path '{safe_link}' -Target '{safe_target}' | Out-Null"
+    result = subprocess.run(["powershell", "-NoProfile", "-Command", script], capture_output=True)
+    return result.returncode == 0 and link.is_dir()
+
+
+def _remove_alias(link: Path):
+    if link.is_symlink():
+        link.unlink()
+    else:
+        os.rmdir(link)
+
+
 def _num(item="CH4_flux", value="12.5", unit="mg m-2 h-1", experiment="exp1", **kw):
     record = dict(kind="numeric", paper_uid="p01", question=3, item=item, variant="00_full", round=1,
                   experiment_id=experiment, value=value, unit=unit)
@@ -340,18 +358,15 @@ class TestEvaluateRun(unittest.TestCase):
         run = _RunFixture.build(self.root, _RunFixture.standard_rows())
         before = _hash_tree(run)
         alias = self.root / "junction-to-run"
-        script = f'New-Item -ItemType Junction -Path "{alias}" -Target "{run}" | Out-Null'
-        created = subprocess.run(["powershell", "-NoProfile", "-Command", script],
-                                 capture_output=True)
-        if created.returncode != 0 or not alias.exists():
-            self.skipTest("NTFS junction creation is unavailable in this environment")
+        if not _directory_alias(alias, run):
+            self.skipTest("directory alias creation is unavailable in this environment")
         try:
             for inside in (alias, alias / "evaluations"):
                 with self.assertRaises(ValueError):
                     evaluate_run(run, output_dir=str(inside))
             self.assertEqual(_hash_tree(run), before)
         finally:
-            os.rmdir(alias)
+            _remove_alias(alias)
         self.assertFalse(alias.exists())
         self.assertEqual(_hash_tree(run), before)
 
@@ -619,14 +634,7 @@ class TestProductionShapedRegressions(unittest.TestCase):
 
     @staticmethod
     def _junction(link: Path, target: Path) -> bool:
-        created = subprocess.run(
-            ["powershell", "-NoProfile", "-Command",
-             f'New-Item -ItemType Junction -Path "{link}" -Target "{target}" | Out-Null'],
-            capture_output=True)
-        if created.returncode == 0 and link.exists():
-            return True
-        os.rmdir(link) if link.is_dir() and not link.is_symlink() else None
-        return False
+        return _directory_alias(link, target)
 
     def test_junction_planted_after_validation_is_caught_before_the_write(self):
         """Finding 5: the path is checked again after mkdir and before every write.
@@ -649,7 +657,7 @@ class TestProductionShapedRegressions(unittest.TestCase):
             self.assertEqual(_hash_tree(run), before)
             self.assertFalse((run / "evaluation_report.json").exists())
         finally:
-            os.rmdir(target)
+            _remove_alias(target)
 
     def test_junction_to_the_runs_parent_is_still_an_ancestor_and_refused(self):
         """Finding 5: resolving either side is what makes the ancestor rule hold."""
@@ -664,7 +672,7 @@ class TestProductionShapedRegressions(unittest.TestCase):
                     evaluate_run(run, output_dir=str(inside))
             self.assertEqual(_hash_tree(run), before)
         finally:
-            os.rmdir(alias)
+            _remove_alias(alias)
 
 
 class TestG7ReviewFindings(unittest.TestCase):
