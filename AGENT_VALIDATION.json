@@ -1,6 +1,6 @@
 {
   "verified_at": "2026-10-02T02:40:15.8452161+08:00",
-  "scope": "Local software G1-G5 and G7 capacity; G6 final whole-branch review/commit/PR/GitHub CI pending; G8 not launched",
+  "scope": "Software G0/G1-G7 delivered as reviewed fork PR with successful Linux/Windows CI; G8 real validation not launched",
   "base_sha": "b92e16b45726238b831ab6bfe56a6ca0c3c9f881",
   "environment": {
     "python": "3.12.13",
@@ -31,27 +31,49 @@
   "scientific_core": "prompts/common/composite/preparation/ensemble/ensemble_utils_meta/ensemble_utils_value unchanged",
   "real_lumina_api_calls": 0,
   "scientific_validation": "NOT_EVALUATED",
-  "github_commit": "3abc48284b04675d02920b474515abf9f3c484b3",
+  "github_commit": "98f44b8a92abed76bf670c6d7a55eacb2a2a87c1",
   "github_pr": "https://github.com/Voss-zeji/LUMINA/pull/1",
   "github_ci": {
-    "fix": "native Windows junction or POSIX symlink; byte-level artifact edit; independent matrix jobs",
-    "failed_run": "https://github.com/Voss-zeji/LUMINA/actions/runs/36910553067",
-    "state": "initial CI failed; portability-only test fix prepared",
-    "local_recheck_exit": 0,
-    "local_recheck_tests": 45,
-    "local_log": "E:\\literatures\\temporary_llm_tasking\\agent-portability-validation-20261002.log",
-    "root_cause": [
-      "Windows PowerShell junction fixtures invoked on Linux",
-      "artifact-order-dependent test read a binary workbook as UTF-8"
+    "actual_api_receipt": "E:\\literatures\\temporary_llm_tasking\\github-ci-success-36916434405-jobs.jsonl",
+    "run": "https://github.com/Voss-zeji/LUMINA/actions/runs/36916434405",
+    "history": {
+      "fix": "native Windows junction or POSIX symlink; byte-level artifact edit; independent matrix jobs",
+      "failed_run": "https://github.com/Voss-zeji/LUMINA/actions/runs/36910553067",
+      "state": "initial CI failed; portability-only test fix prepared",
+      "local_recheck_exit": 0,
+      "local_recheck_tests": 45,
+      "local_log": "E:\\literatures\\temporary_llm_tasking\\agent-portability-validation-20261002.log",
+      "root_cause": [
+        "Windows PowerShell junction fixtures invoked on Linux",
+        "artifact-order-dependent test read a binary workbook as UTF-8"
+      ],
+      "windows_followup": {
+        "log": "E:\\literatures\\temporary_llm_tasking\\agent-path-guard-validation-20261002.log",
+        "root_cause": "Windows 8.3 path spellings in private write guard comparison",
+        "local_tests": 45,
+        "exit_code": 0,
+        "run": "https://github.com/Voss-zeji/LUMINA/actions/runs/36913919125",
+        "fix": "resolve run and target before containment comparison"
+      }
+    },
+    "head_sha": "98f44b8a92abed76bf670c6d7a55eacb2a2a87c1",
+    "jobs": [
+      {
+        "mock_tests": "success",
+        "basic_checks": "success",
+        "name": "test (ubuntu-latest)",
+        "url": "https://github.com/Voss-zeji/LUMINA/actions/runs/36916434405/job/110552008174",
+        "conclusion": "success"
+      },
+      {
+        "mock_tests": "success",
+        "basic_checks": "success",
+        "name": "test (windows-latest)",
+        "url": "https://github.com/Voss-zeji/LUMINA/actions/runs/36916434405/job/110552008607",
+        "conclusion": "success"
+      }
     ],
-    "windows_followup": {
-      "log": "E:\\literatures\\temporary_llm_tasking\\agent-path-guard-validation-20261002.log",
-      "root_cause": "Windows 8.3 path spellings in private write guard comparison",
-      "local_tests": 45,
-      "exit_code": 0,
-      "run": "https://github.com/Voss-zeji/LUMINA/actions/runs/36913919125",
-      "fix": "resolve run and target before containment comparison"
-    }
+    "state": "success"
   },
   "goal8": "Missing user-selected papers, endpoint configuration, model/pricing, budgets and resource authorization; separate batch approval required",
   "code_sha256": {
@@ -99,5 +121,10 @@
     "model": "opencode-free/space-bunny-free",
     "critical": 0,
     "important": 0
+  },
+  "latest_evaluation_tests": {
+    "log": "E:\\literatures\\temporary_llm_tasking\\agent-path-guard-validation-20261002.log",
+    "exit_code": 0,
+    "passed": 45
   }
 }
