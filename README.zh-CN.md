@@ -2,124 +2,108 @@
 
 **简体中文** | [English](README.md)
 
-[![Tests](https://github.com/Voss-zeji/LUMINA/actions/workflows/mock-tests.yml/badge.svg)](https://github.com/Voss-zeji/LUMINA/actions/workflows/mock-tests.yml)
-[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+**LLM Unified Model Integration for Nullifying AI Hallucination**
 
-LUMINA 利用多个大语言模型从学术文献中提取结构化科学证据。此 Voss fork 增加了持久化运行控制、API 预算管理、故障恢复、人工审批与独立参考集评估机制。
+LUMINA 是用于定量科学综合的多模型框架。它结合文献结构化抽取、支持证据的交叉核验和模型共识确认，减少无依据的模型输出，构建可追溯的科研数据集。
 
-官方全称为 **Language-model Unified Meta-analysis with Integrated Numeric Assembly**。当前代码定位为构建文献证据表，**未实现**效应量计算、异质性检验或随机效应模型等统计 Meta 分析。
+本仓库提供 Aqua 和 Wildfire 科研流程，以及 Voss Agent 运行模式。
 
-## 1. 项目用途
+## 1. 科研目的
 
-LUMINA 面向已自主完成文献检索并明确提取需求的研究人员。它调用多个模型分别阅读每篇文献，保留回答与支撑证据，由其他模型核验该证据是否在正文中存在，最后将候选结果按规则整理为表格供人工审查。
+科学综合需要将数值与其单位、研究背景和实验条件一并提取。LUMINA 以**文献 × 问题 × 模型 × 轮次**组织任务：多个模型分别给出候选回答和原文证据，其他模型核验证据，再对候选结果进行汇总。
 
-| 已实现能力 | 当前未实现能力 |
-|---|---|
-| 固定 Aqua 与 Wildfire 问题集 | 自动生成科学问题或自动设计抽取 schema |
-| PDF/Markdown 文本准备与逐题结构化抽取 | 文献检索、初筛、或完整的系统评价流程 (PRISMA) |
-| 证据上下文检索与跨模型交叉核验 | 对每个数值、单位与实验条件的严格事实判定 |
-| 具备来源追溯的文件保存与基于规则的候选汇总 | 效应量计算、统计合并或文献偏倚风险评分 |
-| Agent 运行控制与只读独立参考集评估模块 | Web 界面、HTTP API 服务或 Docker 容器部署 |
+结果表保留科学变量、原始文献、模型回答与核验记录之间的对应关系，可用于证据审查、研究数据库构建及后续定量分析。
 
-研究人员负责文献选择、科学定义、独立参考集准备以及最终数据审核。
+## 2. 科学框架
 
-## 2. 支持的研究任务
+论文稿件将方法分为三个阶段：
 
-抽取问题定义在 [`lumina/prompts.py`](lumina/prompts.py) 中。修改配置中的领域描述不会自动生成新问题。当前不支持自定义或部分选择问题。
-
-| 领域 | 问题编号 | 机器提取目标 |
+| 阶段 | 操作 | 结果 |
 |---|---|---|
-| **Aqua**: 淡水养殖 | Q1 | 研究地点、地点细节、研究时期、纬度、经度 |
-| | Q2 | 养殖物种：fish、shrimp、crab、mixed 或 others |
-| | Q3 | 比较试验或处理条件下的甲烷通量数值，附带物理单位 |
-| **Wildfire**: 生物质燃烧 | Q1 | 研究地点与研究时期 |
-| | Q2–Q4 | 按燃料/燃烧条件提取 CO2、CH4 和 N2O 排放因子，附带原文证据、MCE 及 `experimental` 标记 |
-
-Aqua 数值提示词强制要求独立的 `unit` 字段。Wildfire 提示词描述了排放因子单位，但未强制单独设立该字段。Wildfire 的 `experimental` 标记用于区分本研究实验值与文献引用值，并非跨文献全局唯一的实验实体 ID。
-
-## 3. 科研流程
+| **初始问答（Initial Query）** | 多个基础模型分别阅读文献并回答指定研究问题 | 候选数值、原文证据和模型自报置信度 |
+| **交叉核验（Cross-examination）** | 其他选定模型将引用证据与原文检索片段进行比对 | 核验判断及支持引文 |
+| **共识确认（Consensus Confirmation）** | 按证据支持程度筛选，并根据模型间的一致性汇总候选 | 结构化研究记录与候选明细 |
 
 ```mermaid
 flowchart TD
-    Input["人工选定的 PDF 或 Markdown 文献"] --> Prepare["准备文献文本"]
-    Questions["固定问题集与选定模型"] --> Extract["按文献 / 问题 / 模型 / 轮次抽取"]
-    Prepare --> Extract
-    Extract --> Composite["按问题汇总答案与证据表"]
-    Prepare --> Vectors["正文切块并缓存向量"]
-    Composite --> Retrieve["为候选证据检索上下文"]
-    Vectors --> Retrieve
-    Retrieve --> Verify["其他模型核验证据存在性与相关性"]
-    Verify --> Scores["记录原文引文与 cross_score"]
-    Composite --> Full["全量候选: 00_full"]
-    Scores --> Filtered["阈值候选: MiniCrossNN"]
-    Full --> Ensemble["逐篇文献执行标准化与规则汇总"]
-    Filtered --> Ensemble
-    Ensemble --> Tables["结果表与候选明细表"]
-    Tables --> Review["研究者审查与独立参考集评估"]
+    Papers["选定文献与研究问题"] --> Query["初始问答：多个模型提取答案"]
+    Query --> Candidates["候选数值、证据与置信度"]
+    Papers --> Context["正文切块与证据检索"]
+    Candidates --> Verify["由其他模型交叉核验"]
+    Context --> Verify
+    Verify --> Votes["核验判断与原文引文"]
+    Votes --> Consensus["共识确认：筛选与汇总"]
+    Candidates --> Consensus
+    Consensus --> Data["保留候选来源的科研数据集"]
+    Data --> Review["研究者审核与后续分析"]
 ```
 
-| 阶段 | 执行内容 | 主要产出 |
+抽取阶段使用保留的完整文章正文。检索用于定位交叉核验的证据：将候选证据向量化，与正文片段匹配，再将匹配片段及相邻上下文提供给核验模型。
+
+仓库中的核验任务检查证据是否存在及是否与主题相关。生成模型不参与自身候选的核验。选择 M 个抽取模型时，`cross_score` 统计其他模型的支持票，最高为 **M − 1**；`min_cross_scores` 设置核验阈值，`ensemble` 对相应候选进行标准化与汇总。
+
+稿件将证据支持与基础模型共识作为两个控制维度。仓库保留核验分数、候选频次和模型标识，便于检查每一步的筛选与汇总依据。
+
+## 3. 研究任务与论文案例
+
+稿件以**38 篇论文和 633 个基准问答对**评估温室气体数据提取，与 24 个单独运行的 LLM 和 17 位领域专家比较，主实验采用 7 个选定模型组成集成。
+
+复现案例包括三个土壤无脊椎动物指标：白蚁对植物生物量、蚯蚓对葡萄糖苷酶活性、蚂蚁对土壤电导率的影响，以及海洋动物森林群落的存活率。抽取数据接入原研究的分析流程。
+
+上述设置对应稿件中的研究实验。使用本仓库时，用户自行选择模型，并运行以下领域问题集：
+
+| 领域 | 问题 | 提取内容 |
 |---|---|---|
-| `prepare` | 转换 PDF（可选 Marker）；读取 Markdown；截取 References / Acknowledgments / Appendix 之前的正文；统计近似 token | Markdown 文本与预处理元数据 |
-| `examiner` | 向每个选定模型发送截取后的正文及单个固定问题 | 逐任务回答表与元数据 |
-| `composite` | 收集选定模型在当前轮次下的有效回答，保留来源指纹 | 每题一个 Excel 候选总表 |
-| `embeddings` | 将正文切块并生成向量嵌入 | `.npy` 向量矩阵与缓存元数据 |
-| `cross` | 检索最相似正文块及相邻块；由其他模型核验证据是否存在且相关 | 核验明细、原文引文与分数 |
-| `ensemble` | 对无过滤版本与配置的阈值版本分别执行标准化与规则汇总 | 结果表与全部标准化回答表 |
+| **Aqua——淡水养殖** | Q1 | 研究地点、地点细节、研究时期、纬度与经度 |
+| | Q2 | 养殖物种：fish、shrimp、crab、mixed 或 others |
+| | Q3 | 比较试验或不同处理的甲烷通量及单位 |
+| **Wildfire——生物质燃烧** | Q1 | 研究地点与研究时期 |
+| | Q2–Q4 | CO2、CH4、N2O 排放因子，燃料与燃烧条件、MCE、实验值或文献引用值标记 |
 
-抽取阶段采用 3 条消息（专家角色、正文/输出格式说明、具体问题），大模型接收截断后的整篇正文。保存的 Markdown 文件保留完整正文，下游读取时执行截断。
+具体问题和输出要求见 [`lumina/prompts.py`](lumina/prompts.py)。
 
-核验阶段模型接收检索到的局部上下文与候选的 `evidence`，而非完整的“数值-单位-条件”事实断言。提取模型不参与自身候选的核验；其他选定模型返回 `existing_flag`（0/1）与 `direct_quote`。`cross_score` 统计确认存在的票数，在 M 个提取模型下最高为 **M − 1**。它衡量的是证据受文本支撑的程度，而非科学事实绝对准确率。
+## 4. 程序流程
 
-默认检索使用 2,048 字符切块、20% 重叠率，取最佳匹配块及其前后相邻块各 1 个（最多 3 块，边界处少于 3 块），相关参数可在 `RUN` 中配置。
+科学框架通过六个处理阶段执行：
 
-## 4. 传统与 Agent 运行模式
+| 科学步骤 | 程序阶段 | 处理内容 | 产出 |
+|---|---|---|---|
+| 输入准备 | `prepare` | 使用 Marker 将 PDF 转换为 Markdown，准备文章正文并检查近似 token 数 | Markdown 与准备信息 |
+| 初始问答 | `examiner` | 构建文献和问题提示词，调用选定模型，解析结构化回答 | 逐任务回答表与元数据 |
+| | `composite` | 合并选定模型在当前轮次的回答 | 按问题组织的 Excel 候选表 |
+| 交叉核验 | `embeddings` | 将正文切分为重叠片段并生成向量 | 向量缓存与元数据 |
+| | `cross` | 检索证据上下文，调用其他核验模型并汇总判断 | 核验记录与 `cross_score` |
+| 共识确认 | `ensemble` | 标准化回答，汇总全量及阈值筛选版本 | 结果表与全部标准化回答表 |
 
-两套模式共享相同的底层科研算法，但共享核心算法并不保证两套模式在同一模型下获得完全相同的文字回复（受外部 API 随机性等影响）。Agent 模式增加了执行控制层，不替换抽取问题与汇总算法。
+保存的 Markdown 保持完整，下游读取时使用 References、Acknowledgments 或 Appendix 标题之前的正文。默认检索参数为 2,048 字符切块、20% 重叠，并取最佳匹配片段前后各一个相邻片段。
 
-| 维度 | 传统模式 | Agent 模式 |
+### 传统模式与 Agent 模式
+
+两种模式调用同一套科研流程。
+
+| | 传统模式 | Voss Agent 模式 |
 |---|---|---|
-| 命令入口 | `--domain` / `--stage` | `run` / `resume` 及控制命令 |
-| 文献输入 | `config.py` 中的领域目录 | 显式文献列表，作为快照复制到独立 run |
-| 进度追踪 | 检查阶段文件与任务指纹/schema | SQLite 权威状态、任务记录与请求回执 |
-| 成本与恢复 | 无 Agent 预算账本 | 冻结预算、持久化响应、去向不明请求核对 |
-| 人工审批 | 无强制试跑至批处理放行 | 试跑后审查报告，显式人工批准 |
-| 产物路径 | 配置的固定目录 | `runs/<run_id>/outputs/R<round>/` 与 JSON 报告 |
+| 入口 | `--domain` / `--stage` | `run`、`resume` 及控制命令 |
+| 输入 | `config.py` 中的领域目录 | 显式文献列表与独立输入快照 |
+| 进度 | 阶段文件与任务指纹 | 持久化 SQLite 状态、任务与请求回执 |
+| 执行 | 指定阶段或完整流程 | 试跑、人工批准、批量执行与最终完整性检查 |
+| 成本记录 | 输出中的请求信息 | 调用次数、token、费用、运行时间预算及请求账本 |
+| 输出 | 配置的领域目录 | `runs/<run_id>/outputs/R<round>/` 与 JSON 报告 |
 
 ```mermaid
 flowchart LR
-    User["用户与配置"] --> CLI["run_pipeline.py"]
-    CLI --> Traditional["传统模式: --domain / --stage"]
-    CLI --> AgentMode["Agent 模式: run / resume / approve"]
-    AgentMode --> Ctrl["运行状态、预算、回执与人工审批"]
-    Ctrl --> Core["六阶段科研流程"]
-    Traditional --> Core
-    Core --> Llm["llm.py: 直接请求或受控请求"]
-    Llm --> Api["对话与嵌入服务接口"]
-    Core --> Out["结构化产物"]
-    Out --> Eval["只读独立参考集评估"]
+    Plan["冻结输入、模型与预算"] --> Trial["试跑选定文献"]
+    Trial --> Approval["审核原文、结果与费用"]
+    Approval -->|"批准后 resume"| Batch["处理完整文献列表"]
+    Batch --> QC["检查任务与文件完整性"]
+    QC --> Done["保存完成记录"]
 ```
 
-```mermaid
-flowchart TD
-    Init["INIT / PREFLIGHT: 冻结与校验运行条件"] --> Ready["INPUT_READY: 输入快照与任务规划"]
-    Ready --> Smoke["SMOKE: 试跑选定文献"]
-    Smoke --> Gate["HUMAN_GATE_SMOKE: 审查报告与原始文献"]
-    Gate -->|"人工批准后 resume"| Batch["BATCH: 执行全量文献列表"]
-    Batch --> QC["FINAL_QC: 检查任务与文件完整性"]
-    QC --> Archive["ARCHIVE / DONE: 保存完成记录"]
-    Smoke -.-> Attention["暂停、异常或去向不明请求"]
-    Batch -.-> Attention
-    Attention --> Human["人工排除原因后继续处理"]
-```
-
-在批准进入批处理前，研究人员应仔细审查试跑报告（`reports/smoke_report.json`）：比对抽样答案与原始文献、核对提取单位与处理条件归属，并检查失败任务、缺失值及实际花费。即便是单篇文献的运行，也会在此门槛挂起。
-
-批处理执行会复用试跑已完成的有效请求。轮次独立保存与汇总，无跨轮合并统计。`approve` 命令仅记录人工审批决定，**不会自动启动计算**，必须显式执行 `resume`。`ARCHIVE` 是工作流完成状态，并非向外部云端上传或发布数据的动作。
+Agent 在批量阶段复用试跑已完成的请求，各轮次分别保存结果。试跑审核时，研究者检查原文证据、单位、处理归属及费用，再决定是否继续。工程完成状态与独立科学评价分别记录。
 
 ## 5. 安装与配置
 
-推荐使用 **Python 3.12**，经 Windows/Linux CI 测试。请在独立 Python 环境中安装现有依赖：
+使用 Python 3.12 和独立环境：
 
 ```bash
 git clone https://github.com/Voss-zeji/LUMINA.git
@@ -127,187 +111,122 @@ cd LUMINA
 python -m pip install -r requirements.txt
 ```
 
-Markdown 文档输入无需安装 PDF 转换器。若输入 PDF，需单独安装具备 `PdfConverter`、`create_model_dict` 和 `text_from_rendered` 兼容 API 的 `marker-pdf`。PDF 转换可能需要模型资源，此时 Agent 规格文件必须显式设置 `allow_pdf_resources: true`。
+输入 PDF 时，安装提供 `PdfConverter`、`create_model_dict`、`text_from_rendered` 接口的兼容 `marker-pdf` 版本；也可直接提供 Markdown。
 
-复制本地配置文件：
-
-**PowerShell**
+复制配置模板：
 
 ```powershell
+# PowerShell
 Copy-Item config.example.py config.py
 ```
 
-**Bash**
-
 ```bash
+# Bash
 cp config.example.py config.py
 ```
 
-编辑复制的配置文件：
-
 | 配置项 | 填写内容 |
 |---|---|
-| `FULL_LLM_POOL` / `SELECTED_KEYS` | 模型全称、provider 归属标识、选定的抽取模型 |
-| `LLM_SETTINGS` | API 密钥、chat 的 base URL，以及 `supports_json_mode` |
-| `EMBEDDING_MODEL` | 嵌入模型全称/归属与完整 POST 请求 URL；若省略则回退到其 provider 的 URL |
-| `RUN` | 轮次、温度、切块大小/重叠率、上下文扩展块数、交叉核验阈值 |
-| `DOMAINS` | 领域描述、固定问题编号、传统模式输入输出目录 |
+| `FULL_LLM_POOL` / `SELECTED_KEYS` | 模型名称、服务来源与选定的抽取模型 |
+| `LLM_SETTINGS` | API 密钥、chat base URL 与 `supports_json_mode` |
+| `EMBEDDING_MODEL` | 嵌入模型、服务来源与完整 embedding 请求 URL |
+| `RUN` | 轮次、温度、切块大小及重叠率、上下文扩展、核验阈值 |
+| `DOMAINS` | 领域描述、问题编号及传统模式的输入输出目录 |
 
-chat 调用 OpenAI 兼容的 `chat.completions`；embedding 使用直接 HTTP POST 请求。未实现原生厂商 SDK 适配，亦不支持自动模型回退（fallback）。若 provider 拒绝 `response_format` 参数，设置 `supports_json_mode=False`。
+chat 使用 OpenAI 兼容的 `chat.completions` 接口，embedding 使用直接 HTTP POST。`supports_json_mode=True` 请求 JSON 对象，随后由 JSON5 解析器和本地字段规则处理。密钥保存在被 Git 忽略的本地 `config.py` 中。
 
-JSON 模式仅向模型请求 JSON 对象结构，并非强制严格的 JSON Schema 解码。代码依赖 JSON5 解析与字段规则校验。敏感密钥保存在本地 `config.py`，受 Git 忽略保护。模型名称仅为配置示例，不保证外部 API 实际可用。
-
-过滤汇总需至少选择 2 个抽取模型。`min_cross_scores` 每个阈值必须是 1 到 M − 1 之间的整数；双模型示例使用 `[1]`。
+选择 M 个抽取模型时，每个核验阈值应在 1 到 M − 1 之间。双模型示例使用 `min_cross_scores: [1]`。
 
 ## 6. 运行任务
 
-### Agent 模式
+### 传统科研流程
 
-复制 [`research.example.json`](research.example.json) 为 `research.json`。填入实际文献路径、模型价格与来源依据、输入输出 token 上限以及四项预算：`max_calls`、`max_tokens`、`max_cost`、`max_runtime`。
+将文献放入配置的领域目录后运行：
 
-模板中的 `null` 和 `REPLACE` 是待填写的占位值，补齐后才能运行。试跑默认选取前 `smoke_size` 篇文献，也可在 `smoke_papers` 中显式指定。诊断 advisor 默认关闭。
+```bash
+python run_pipeline.py --config config.py --domain aqua --stage all
+python run_pipeline.py --config config.py --domain wildfire --stage all
+```
 
-生成任务规划（不发起模型请求）：
+已有前序产物时，可以选择单个阶段：
+
+```bash
+python run_pipeline.py --config config.py --domain wildfire --stage ensemble
+```
+
+### Agent 执行
+
+复制 [`research.example.json`](research.example.json) 为 `research.json`，填写文献路径、轮次、试跑文献、模型价格及依据、token 上限，以及 `max_calls`、`max_tokens`、`max_cost`、`max_runtime` 四项预算，替换模板中的 `null` 和 `REPLACE`。需要准备 PDF 模型资源时，设置 `allow_pdf_resources: true`。
+
+创建运行并查看计划，此步骤不发送模型请求：
 
 ```bash
 python run_pipeline.py run --spec research.json --config config.py --runs-dir runs --run-id study-001 --dry-run
 python run_pipeline.py status --runs-dir runs --run-id study-001
 ```
 
-Dry-run 复制输入快照、冻结运行条件并在 `INPUT_READY` 规划任务，不执行 PDF 转换或大模型抽取。使用同一运行的 `resume` 启动试跑：
+继续同一次运行，执行试跑：
 
 ```bash
 python run_pipeline.py resume --runs-dir runs --run-id study-001 --config config.py
 ```
 
-审查 `reports/smoke_report.json` 与原始文献。从 `status` 输出中获取待放行的门槛 ID（替换下方的 `GATE_ID` 占位符）：
+审核 `reports/smoke_report.json` 和原始文献，从 `status` 读取待批准的 gate ID，并替换下方 `GATE_ID`：
 
 ```bash
-python run_pipeline.py approve --runs-dir runs --run-id study-001 --gate-id GATE_ID --reason "Reviewed trial outputs and approved the frozen batch scope"
+python run_pipeline.py approve --runs-dir runs --run-id study-001 --gate-id GATE_ID --reason "Reviewed trial evidence, outputs, and costs"
 python run_pipeline.py resume --runs-dir runs --run-id study-001 --config config.py
 python run_pipeline.py report --runs-dir runs --run-id study-001
 ```
 
-`approve` 仅记录决策；`resume` 恢复执行。退出码约定：**2** 表示暂停或等待人工处理；**1** 表示执行错误；**0** 表示命令成功结束。已存在的 run-id 不可静默覆盖。
+`approve` 记录批准决定，`resume` 继续执行。退出码 2 表示暂停或需要人工处理。`max_runtime` 从运行创建时开始计算，包含等待与审核时间。响应先记录后解析，执行结果不确定的请求保留供人工核对。暂停、恢复和请求控制详见 [Agent 指南](AGENT_GUIDE.md)。
 
-CLI worker 受到 `max_runtime` 监控，该时间**自运行创建时刻起算**，包含待机、暂停与人工审查耗时。暂停仅阻断后续新请求，无法撤回已发出的远程 HTTP 调用。人工放行不能追加预算或更改已冻结的科研条件。
-
-请求在发出前预留预算，响应先写入持久账本再进行解析。缺失 usage 计为保守上限。去向不明的请求需人工核对，严禁盲目重试。仅可确认未执行的拒绝才允许有限重试；SDK 静默重试已被显式关闭。更多细节参考 [Agent 指南](AGENT_GUIDE.md)。
-
-### 传统模式
-
-将 PDF 或 Markdown 放入配置的领域目录：
-
-```bash
-python run_pipeline.py --config config.py --domain aqua --stage all
-python run_pipeline.py --config config.py --domain wildfire --stage all
-# 单阶段运行（需已有前序产物）：
-python run_pipeline.py --config config.py --domain wildfire --stage ensemble
-```
-
-阶段可选：`prepare`、`examiner`、`composite`、`embeddings`、`cross`、`ensemble` 与 `all`。传统模式会校验文件来源与指纹，支持续跑，但无 Agent 预算账本或强制试跑审批。异常中断可能留下锁文件，需核实 PID 后再行清理。
-
-## 7. 输入、产物与可追溯性
-
-任务颗粒度为 **文献 × 问题 × 模型 × 轮次**。单次模型响应可能返回多个 item，均包含 `value`、`evidence` 与 `confidence_lv` 及领域字段。系统补入文献/模型/问题/轮次标识、请求/正文指纹、token 统计及耗时。合并表赋予 `candidate_id`；核验赋予 flags 与 `cross_score`。
-
-命名为 `.csv` 的文件实际为**制表符分隔（TSV）**。同一调用的 token 总数会在该次调用的所有 item 行重复出现；直接累加会重复计数，全局用量应以 Agent 请求账本为准。
-
-```text
-runs/<run_id>/
-  manifest.json                 # 冻结的输入快照与执行条件
-  ledger.sqlite                 # 权威状态、任务、请求与审批账本
-  inputs/                       # 文献原始输入快照（.md 或 .pdf）
-  outputs/
-    prepared/                   # 完整 Markdown 正文与预处理元数据
-    R01/
-      examiner/                 # 逐任务抽取 TSV 与元数据
-      composite/                # LUMINA_Q01.xlsx, LUMINA_Q02.xlsx, ...
-      embeddings/               # 正文切块向量与缓存元数据
-      cross/                    # 核验记录与 cross_scores.xlsx
-      ensemble/
-        00_full/                # 未过滤汇总结果与候选明细
-        MiniCross01/            # 指定核验阈值子集产物
-  checkpoints/                  # 原始响应与阶段完整性记录（stages/<task_id前16位>/）
-  reports/                      # 规划、试跑、终检与状态 JSON 报告
-  state.json / metrics.json     # 导出的状态与指标
-  events.jsonl / errors.jsonl   # 导出的事件与错误流
-```
-
-每个问题与变体产出 `*_Ensemble_Result_*` 与 `*_Ensemble_All-Standard-Answers_*` 表格。`00_full` 包含全量候选；阈值变体要求候选具有有效的当前核验记录。核验缺失不视为否定票。
-
-汇总仅在单篇文献内部进行文本规范化与数值归并，不进行跨文献统计合并，亦不转换物理单位。数值 `±` 表达式默认取中心数值。当有效规范化数值中，包含两位及以上小数的比例 ≥ 50% 时，现存的跨 item 模式保留数值候选集合，而非保证评出单一胜者。投票计数统计的是候选行数，并不等同于独立大模型数量或独立研究数量。
-
-输入哈希、响应回执与向量缓存支持追溯与断点续跑。修改已冻结的输入或代码需新建 run。这些哈希无法锁定外部库版本、服务端模型版本或 PDF 转换模型权重。
-
-## 8. 科学可靠性与当前限制
-
-工程完成、模型一致与科学结果正确是不同的判断。**`DONE` 状态与通过最终质检（FINAL_QC）并不代表科学正确性**；符合基础校验的全空回答也可以完成流程。
-
-- **证据核验局限**：仅核验证据存在性与相关性，不核查数值或事实断言。正面投票仅验证 `direct_quote` 非空，未在代码层面强制比对正文原文子串。
-- **字段与校验漏洞**：初始校验规则不够严格，部分缺失元数据、未声明物种标签或非数值字符串可能绕过校验。置信度为模型自评，未经统计校准。
-- **实验身份不完整**：汇总算法未完整保留试验组别标识。Aqua 抽取模板不要求 `experimental` 字段，数值评估模块却依赖它推导实验身份；缺少该字段时结果进入 `UNMATCHED`。模型若额外返回该字段，可以保留，但流程没有保证。Wildfire 的 `True`/`Ref` 标记也不是可靠的独立实验 ID。
-- **数值处理策略**：数值汇总默认将字符串精确的 `-1` 视为缺失值丢弃，若真实科学通量恰为 `-1`（如吸收通量）将被过滤。燃烧条件后缀中的 None 与 mixed 可能合并；小数聚合分支可能混合不同条件项。单位规范化非严谨的物理量纲系统。
-- **文献覆盖损失**：截断附录/参考文献、PDF 表格解析偏差、图像中的数值、长文注意力稀释以及局部检索召回失败，均可能造成信息遗漏。
-- **参考指标局限**：遗漏或无法比对的预测可能不进入召回率分母；部分参考集未覆盖的预测可能计入假阳性（FP）。报告指标时应同时报告可比较比例与未决案例。协议标签不能证明独立人工复核已经完成。
-
-使用在抽取流程之外独立构建的参考集运行评估：
+与独立准备的参考集比较：
 
 ```bash
 python run_pipeline.py evaluate --runs-dir runs --run-id study-001 --gold independent-gold.json --output-dir evaluation-study-001
 ```
 
-评估产物必须指定在生产运行目录之外。[`gold.example.json`](gold.example.json) 提供了人造参考集格式示例。若未提供 `--gold`，评估报告 `NOT_EVALUATED` 且指标为空。人工合成示例和 mock 测试不能证明真实文献提取的科学准确率。
+评价器在生产运行目录之外写入结果，参考格式见 [`gold.example.json`](gold.example.json)。
 
-## 9. Voss Fork 的修改与演进
+## 7. 结果与数据组织
 
-本项目构建于开源基线 [billy31/LUMINA](https://github.com/billy31/LUMINA)。在 fork 启动 Agent 开发前，早期的数据工程修复已合并至上游分支。
+每条回答包含 `value`、`evidence`、`confidence_lv` 及领域字段。元数据将其关联至文献、问题、模型、轮次和请求；合并表增加基于内容的 `candidate_id`，交叉核验增加模型判断与分数。
 
-| 保留的科研核心 | Voss Fork 新增机制 |
-|---|---|
-| 固定问题集、提示词、证据支持判定准则 | 冻结的研究规格、文献输入快照、稳定的任务哈希标识 |
-| 元数据/数值规则汇总与核验阈值过滤机制 | SQLite 运行状态账本、预算管理、持久化响应回执 |
-| 原有数据来源追溯、单位保留与文件原子写入保护 | 试跑审批门槛 (HUMAN_GATE_SMOKE)、暂停/续跑、CLI 进程监控 |
-| 传统命令行运行方式 | 结构化 JSON 报告、显式跨任务导入、受限诊断 advisor |
-| | 只读独立参考集评估模块及 Windows/Linux 离线自动化测试 |
+- **回答文件**：按模型和问题保存；`.csv` 实际使用制表符分隔（TSV）。
+- **候选表**：按问题保留各模型回答、证据及来源。
+- **核验记录**：保存每个核验模型的判断及引用原文。
+- **结果表**：`00_full` 和配置的 `MiniCrossNN` 版本分别产出 `Ensemble_Result` 与 `Ensemble_All-Standard-Answers`。
+- **Agent 记录**：保留输入快照、冻结配置、请求回执、预算和执行报告。
 
-核心调用点植入了可选的 runtime 钩子（涵盖 `cross_validation`、`examiner`、`llm`、`utils` 及入口文件）。提示词与汇总算法未做重新设计，原有的科学局限依然存在。Advisor 受到严格白名单限制，不能修改科学数值、模型、提示词、阈值、预算或批准人工门槛。
+汇总在单篇文献内规范化元数据、数值和单位字符串。选择后续分析数据时，应同时查看结果表与候选明细。
 
-## 10. 文档与代码组织
-
-| 文档 | 作用说明 |
-|---|---|
-| [Agent 指南](AGENT_GUIDE.md) (中文) | 规格定义、控制命令、预算管理、人工门槛与故障恢复 |
-| [工作流说明书](LUMINA_AGENTIC_WORKFLOW.md) (中文) | 科研数据链路与工程控制机制详解 |
-| [计划与目标](LUMINA_AGENTIC_PLAN_AND_GOALS.md) (中文) | 软件交付证据与待开展的真实文献验收说明 |
-| [Agent 审查报告](AGENT_REVIEW.md) / [验证回执](AGENT_VALIDATION.json) | 历史软件功能验证记录 |
-| [早期修复报告](FIX_REPORT.md) | Fork 前的数据与工程修复记录 |
-
-软件工程交付已记录完成；真实文献的科学验收仍待推进。历史验证回执仅代表对应提交版本，不代表未来任意状态。
-
-核心代码导航：[`run_pipeline.py`](run_pipeline.py)（主入口）、[`preparation`](lumina/preparation.py)（文献处理）、[`prompts`](lumina/prompts.py)/[`examiner`](lumina/examiner.py)（抽取执行）、[`llm`](lumina/llm.py)（网络适配）、[`composite`](lumina/composite.py)/[`cross_validation`](lumina/cross_validation.py)/[`ensemble`](lumina/ensemble.py)（候选处理与规则汇总）、[`agent`](lumina/agent)（运行控制层）、[`evaluation`](lumina/evaluation.py)（参考集比较）。
-
-## 11. 测试与开源协议
-
-在仓库根目录下运行测试前，必须显式开启离线防护环境变量以阻断网络：
-
-**PowerShell**
-
-```powershell
-$env:LUMINA_TEST_OFFLINE = "1"
-$env:PYTHONPATH = "tests"
-python -B -m unittest discover -s tests -v
+```text
+runs/<run_id>/
+  manifest.json       输入、模型、问题与冻结配置
+  ledger.sqlite       任务、请求尝试、预算和批准记录
+  inputs/             原始文献快照
+  outputs/
+    prepared/         Markdown 与准备元数据
+    R01/
+      examiner/       逐任务回答
+      composite/      按问题组织的候选表
+      embeddings/     向量缓存
+      cross/          核验记录与分数
+      ensemble/       全量及阈值筛选结果
+  checkpoints/        原始响应与阶段回执
+  reports/            计划、试跑、最终及状态报告
 ```
 
-**Bash**
+## 8. 项目资料
 
-```bash
-LUMINA_TEST_OFFLINE=1 PYTHONPATH=tests python -B -m unittest discover -s tests -v
-```
+- [抽取提示词与领域问题](lumina/prompts.py)
+- [模型及目录配置示例](config.example.py)
+- [Agent 研究规格示例](research.example.json)
+- [Agent 操作指南](AGENT_GUIDE.md)
+- [科研流程与 Agent 工作流](LUMINA_AGENTIC_WORKFLOW.md)
 
-当前测试套件包含 365 项测试，覆盖回归测试、文件处理、SQLite 状态、预算核销、进程控制、报告生成与独立评估。[CI](.github/workflows/mock-tests.yml) 在 Windows/Linux 环境使用 Python 3.12 运行测试与基础 Ruff 检查。外部模型/PDF 边界使用 mock；测试通过不代表真实服务商兼容性或真实文献提取准确率。
-
-LUMINA 采用 [Apache License 2.0](LICENSE) 开源协议，完整保留上游项目归属与版权许可。
+本 Voss fork 基于 [billy31/LUMINA](https://github.com/billy31/LUMINA)，保留 [Apache License 2.0](LICENSE) 开源协议。
 
 ---
 
