@@ -2,6 +2,9 @@
 
 **简体中文** | [English](README.md)
 
+[![Tests](https://github.com/Voss-zeji/LUMINA/actions/workflows/mock-tests.yml/badge.svg)](https://github.com/Voss-zeji/LUMINA/actions/workflows/mock-tests.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+
 **LLM Unified Model Integration for Nullifying AI Hallucination**
 
 LUMINA 是用于定量科学综合的多模型框架。它结合文献结构化抽取、支持证据的交叉核验和模型共识确认，减少无依据的模型输出，构建可追溯的科研数据集。
