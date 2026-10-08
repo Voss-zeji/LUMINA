@@ -1,0 +1,79 @@
+# Fill model IDs, endpoints, prices, budgets, and article paths before running.
+# 模型、接口、价格和预算必须按实际服务填写；提示词在 questions.toml。
+selected_models = ["model_a", "model_b"]
+
+[project]
+domain = "aqua"
+domain_knowledge = "greenhouse gas emissions from freshwater aquaculture in China"
+run_id = "my-study-001"
+runs_dir = "../../runs"
+papers = "papers.txt"
+questions = "questions.toml"
+secrets = "secrets.local.toml"
+rounds = [1]
+smoke_size = 1
+stage = "all"
+allow_pdf_resources = false
+
+[models.model_a]
+model = "REPLACE-model-a"
+source = "chat"
+timeout_seconds = 120
+rate_limit_seconds = 1
+
+[models.model_b]
+model = "REPLACE-model-b"
+source = "chat"
+timeout_seconds = 120
+rate_limit_seconds = 1
+
+[providers.chat]
+url = "https://REPLACE.invalid/v1"
+supports_json_mode = true
+
+[providers.embedding]
+url = "https://REPLACE.invalid/v1/embeddings"
+
+[embedding]
+model = "REPLACE-embedding"
+source = "embedding"
+url = "https://REPLACE.invalid/v1/embeddings"
+timeout_seconds = 120
+rate_limit_seconds = 1
+
+[run]
+round_index = 1
+temperature = 0.01
+chunk_size = 2048
+overlap_percent = 20
+text_extension = 1
+min_cross_scores = [1]
+min_consensus_models = 2
+
+[budget]
+# Replace strings with positive numeric limits. max_runtime is seconds, including review time.
+max_calls = "REPLACE"
+max_tokens = "REPLACE"
+max_cost = "REPLACE"
+max_runtime = "REPLACE"
+
+[pricing."REPLACE-model-a"]
+input_per_million = "REPLACE"
+output_per_million = "REPLACE"
+max_input_tokens = "REPLACE"
+max_output_tokens = "REPLACE"
+basis = "REPLACE: provider, date and price source"
+
+[pricing."REPLACE-model-b"]
+input_per_million = "REPLACE"
+output_per_million = "REPLACE"
+max_input_tokens = "REPLACE"
+max_output_tokens = "REPLACE"
+basis = "REPLACE: provider, date and price source"
+
+[pricing."REPLACE-embedding"]
+input_per_million = "REPLACE"
+output_per_million = "REPLACE"
+max_input_tokens = "REPLACE"
+max_output_tokens = "REPLACE"
+basis = "REPLACE: provider, date and price source"

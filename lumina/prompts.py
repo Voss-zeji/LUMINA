@@ -1,318 +1,113 @@
-# -*- coding: utf-8 -*-
-"""All prompts for LUMINA aqua + wildfire extraction and cross-validation.
+"""Load study prompts and question rules from data files, without global overrides."""
+from __future__ import annotations
 
-Prompt structure (Stage 1: Examiner):
-  Each LLM call sends 3 messages in sequence:
-    1. System prompt    → message_system_v2 (role + domain context)
-    2. User instruction → message_system_v2_output (output format + paper content)
-    3. User question    → domain-specific question (JSON schema + constraints)
+import copy
+import string
+import tomllib
+from pathlib import Path
 
-Prompt structure (Stage 4: Cross-Validation):
-  Each LLM call sends 2 messages:
-    1. System prompt    → message_system_ragQuery (evidence verifier role)
-    2. User instruction → checker_requery / checker_requeryFull (context + answer + rules)
-"""
-
-# ---- Stage 1: Examiner — System Prompt (消息 1) ----
-# Sets the LLM's role as a domain expert scientist reading the paper
-# {domain} is replaced with the domain_knowledge string from config
-message_system_v2 = """
-You are skilled in Chinese/English paper reading; You are also a scientist and expert in {domain}. 
-You read through the whole paper (from the beginning to the end);
-provide the best answers (may include multiple items) you can find to the question that I ask.
-"""
-
-# ---- Stage 1: Examiner — Output Instruction + Paper Content (消息 2) ----
-# Instructs the LLM to output JSON with value, evidence, and confidence_lv
-# {content} is replaced with the full markdown text (truncated before References)
-# Forces JSON output via response_format={"type": "json_object"} in the API call
-
-message_system_v2_output = """
-Read the question, analyze step by step, provide your answer and your confidence (0% to 100%) to this answer. 
-Also provide the direct quote (evidence) when required.
-Note: 
-1. The direct quote indicates the specific textual evidence from the article that supports your conclusions.
-2. Provide direct quotes of all evidences. If the evidence is in a table or figure, directly reference the table name or figure name. 
-3. The confidence indicates how likely you think your answer is true. Note that the confidence level should be high if you insist that there are no required values.
-
-Please read this markdown content:\n{content}
-"""
-
-# ---- Stage 4: Cross-Validation — System Prompt (消息 1) ----
-# Positions the LLM as an evidence verifier, not a strict fact-checker
-# The task is to confirm whether a piece of evidence exists in the retrieved context
-message_system_ragQuery = """
-You are a scientific evidence verifier rather than a strict semantic fact-checker. 
-You are going to check:
-Return a JSON object with existing_flag (1 if the evidence exists and is related, otherwise 0) and direct_quote (a verbatim supporting quote, or null). Follow the evidence-existence rules in the user instructions.
-"""
-
-# ---- Stage 4: Cross-Validation — Verification Task (消息 2) ----
-# {context}  = the retrieved chunk(s) from the original paper
-# {key_topic} = the item name (e.g. "Study_location", "Forest_smoldering")
-# {answer}    = the evidence text from one model's examiner output
-# The LLM must return JSON: {"existing_flag": 0|1, "direct_quote": "..."}
-
-checker_requery = """
-Rethink before you do the checker and then proceed with the following:
-
-Your task is to verify whether the "answer" in the Candidate Response
-is supported as an existing piece of evidence in the Original Context,
-even if the support is indirect, structural, or coarse-grained.
-
-### Original Context (Source):
-{context}
-
-### Candidate Response (Target):
-Our answer to the {key_topic} is {answer}.
-
-### Instructions:
-1. Ignore conversational fillers (e.g., "Our answer to... is...").
-2. Focus on whether the stated "answer" (e.g., a table, figure, section, or dataset)
-   **exists in the Original Context and is topically related to the {key_topic}**.
-3. Do NOT require the answer to contain explicit quantitative results
-   for the {key_topic} unless explicitly stated.
-4. If the answer exists in the Original Context (e.g., as a table caption, section title,
-   or referenced evidence), set:
-   - "existing_flag" = 1
-   - "direct_quote" = the exact text 
-5. Only set "existing_flag" = 0 if the answer does NOT appear anywhere
-   in the Original Context as a named or referenced evidence item.
-
-### Constraints:
-- The "direct_quote" must be copied 100% verbatim from the Original Context.
-- Table captions, figure captions, section headers, and in-text references
-  are all valid sources of evidence.
-  
-Example:
-{{
-    "existing_flag": 0,
-    "direct_quote": null
-}}
-"""
-
-checker_requeryFull = """
-Rethink before you do the checker and then proceed with the following:
-
-Your task is to verify whether the "answer" in the Candidate Response
-is supported as an existing piece of evidence in the Original Context,
-even if the support is indirect, structural, or coarse-grained.
-
-### Original Context (Source):
-{context}
-
-### Candidate Response (Target):
-Our answer is {answer}.
-
-### Instructions:
-1. Ignore conversational fillers (e.g., "Our answer to... is...").
-2. Focus on whether the stated "answer" (e.g., a table, figure, section, or dataset)
-   **exists in the Original Context**.
-3. Do NOT require the answer to contain explicit quantitative results unless explicitly stated.
-4. If the answer exists in the Original Context (e.g., as a table caption, section title,
-   or referenced evidence), set:
-   - "existing_flag" = 1
-   - "direct_quote" = the exact text 
-5. Only set "existing_flag" = 0 if the answer does NOT appear anywhere
-   in the Original Context as a named or referenced evidence item.
-
-### Constraints:
-- The "direct_quote" must be copied 100% verbatim from the Original Context.
-- Table captions, figure captions, section headers, and in-text references
-  are all valid sources of evidence.
-  
-Example:
-{{
-    "existing_flag": 0,
-    "direct_quote": null
-}}
-"""
-
-# -------------------------
-# Aqua domain prompts (3 questions)
-# -------------------------
-
-# Q1: Study metadata — location, period, coordinates
-# Extracted as meta items (text), ensembled via ensemble_utils_meta
-aqua_question_A_meta = """
-What are the study locations and study period in this study? Answer the above question and provide direct evidence.
-Note: 
-1. 'Study locations' refer to the regions that were the focus or sites of this research. 
-2. 'Study period' refer to the specific duration or timeframe during which the research or investigation is conducted. 
-It indicates the time allocated for data collection, analysis, or other activities related to the study.
-3. Evidence refers to directly quoting the exact text or the titles of tables from the article. Do not perform any paraphrasing. 
-Directly extract the content (full sentence or the Table titles) from the article that supports your answer.
-4. The latitude and longitude should be in decimal format
-The answer should be provided exclusively in JSON format, following the example structure below:
-{
-    "Study_location": {
-        "value": "Example location",
-        "evidence": "Exact source quote or table title",
-        "confidence_lv": 100
-    },
-    "Study_location_detail": {
-        "value": "Example province, city",
-        "evidence": "Exact source quote",
-        "confidence_lv": 100
-    },
-    "Study_period": {
-        "value": "2003-2017",
-        "evidence": "Exact source quote",
-        "confidence_lv": 80
-    },
-    "Latitude": {
-        "value": 45,
-        "evidence": "Exact source quote",
-        "confidence_lv": 100
-    },
-    "Longitude": {
-        "value": 130,
-        "evidence": "Exact source quote",
-        "confidence_lv": 90
-    }
-}
-"""
-
-# Q2: Cultured species — constrained choice (fish/shrimp/crab/mixed/others)
-# Extracted as meta item (text), ensembled via ensemble_utils_meta
-aqua_question_B_experiment = """
-Which of the following species were cultured in the aquaculture ponds where this study measured CH4 flux? The value should be chosen only from the following selections:
-A [fish] B [shrimp] C [crab] D [mixed] E [others].
-
-Answer the above question and provide direct evidence.
-Note:
-1. Evidence refers to directly quoting the exact text or the titles of tables from the article. Do not perform any paraphrasing. 
-Directly extract the content (full sentence or the Table titles) from the article that supports your answer.
-2. "mixed" refers to the culturing of multiple species in a single pond, for example, fish, shrimp, and crab.
-3. The above question refers to the species cultured in the aquaculture ponds of this study, excluding those from other research.
-
-The answer should be provided exclusively in JSON format, following the example structure below:
-{
-    "Specie": {
-        "value": "A [fish]",
-        "evidence": "Exact source quote or table title",
-        "confidence_lv": 100
-    }
-}
-"""
-
-# Q3: Methane flux values — per-test extraction, may have multiple items
-# Extracted as numeric items, ensembled via ensemble_utils_value
-aqua_question_C_flux = """
-What are the methane flux values for each of the comparative tests (e.g. different aquaculture ponds, experimental treatments, etc) measured in this study ? 
-Answer the above question and provide direct evidence.
-
-Note:
-1. Extract only the methane flux from aquaculture ponds measured in this study. Flux refers to greenhouse gas emissions per unit time per unit area. 
-Do not look only in the abstract; the answer is usually in the results section.
-4. Evidence refers to directly quoting the exact text or the titles of tables from the article. Do not perform any paraphrasing. 
-Directly extract the content (full sentence or the Table titles) from the article that supports your answer.
+_ROOT = Path(__file__).resolve().parents[1] / 'configs'
+_VARIABLES = {'system': {'domain'}, 'instruction': {'content'}, 'verifier_system': set(),
+              'verifier_instruction': {'context', 'answer', 'key_topic'},
+              'verifier_full': {'context', 'answer'}}
+_FIELDS = {'id', 'prompt', 'kind', 'items', 'allowed_values', 'require_unit',
+           'require_experimental', 'emission_type'}
 
 
-The answer should be provided exclusively in JSON format and may include multiple items, following the example structure below:
-{
-    "Flux-1": {
-        "value": 2.12,
-        "evidence": "Exact source quote or table title",
-        "confidence_lv": 95,
-        "unit": "mg m-2 h-1"
-    }
-}
-"""
+def _builtin(domain: str) -> dict:
+    domain = domain.lower()
+    name = 'aqua' if domain.startswith('aqua') else 'wildfire' if domain.startswith('wild') else None
+    if name is None:
+        raise ValueError(f'Unsupported domain: {domain}; configure a question_set')
+    with (_ROOT / name / 'questions.toml').open('rb') as stream:
+        return tomllib.load(stream)
 
-# -------------------------
-# Wildfire domain prompts (4 questions)
-# -------------------------
 
-# Q1: Study metadata — location, period
-# Extracted as meta items, ensembled via ensemble_utils_meta
-wildfire_question_A_meta = """
-What are the study locations and study period in this study? 
-Answer the above question and provide direct evidence.
-Note: 
-1. 'Study locations' refer to the regions that were the focus or sites of this research.
-2. 'Study period' refer to the specific duration or timeframe during which the research or investigation is conducted. 
-It indicates the time allocated for data collection, analysis, or other activities related to the study.
-3. Evidence refers to directly quoting the exact text or the titles of tables from the article. 
-Do not perform any paraphrasing. Directly extract the content (full sentence or the Table titles) from the article that supports your answer.
-When there are no relevant information, the confidence_lv shoule be set to -1
+def validate_definition(value: dict) -> dict:
+    if not isinstance(value, dict) or set(value) - {'templates', 'questions', 'legacy'}:
+        raise ValueError('Question file requires templates and questions; unknown fields are not supported')
+    templates = value.get('templates')
+    if not isinstance(templates, dict) or set(templates) != set(_VARIABLES):
+        raise ValueError('templates must contain system, instruction, verifier_system, verifier_instruction, verifier_full')
+    for name, variables in _VARIABLES.items():
+        text = templates[name]
+        if not isinstance(text, str) or not text.strip():
+            raise ValueError(f'template {name} must be nonempty text')
+        if name == 'verifier_system':
+            continue
+        try:
+            fields = {field for _, field, _, _ in string.Formatter().parse(text) if field is not None}
+            if fields != variables:
+                raise ValueError(f'template {name} requires exactly placeholders {sorted(variables)}')
+            text.format(**dict.fromkeys(variables, 'test'))
+        except (KeyError, IndexError, AttributeError, ValueError):
+            raise ValueError(f'invalid placeholders/braces in template {name}') from None
+    questions = value.get('questions')
+    if not isinstance(questions, list) or not questions:
+        raise ValueError('questions must be a nonempty list')
+    normalized, ids = [], set()
+    for question in questions:
+        if not isinstance(question, dict) or set(question) - _FIELDS:
+            raise ValueError('unknown question fields')
+        rule = dict(items=[], allowed_values=[], require_unit=False, require_experimental=False) | question
+        for field in ('id', 'prompt'):
+            if not isinstance(rule.get(field), str) or not rule[field].strip():
+                raise ValueError(f'question {field} must be nonempty text')
+        if rule['id'] != rule['id'].strip() or rule['id'] in ids:
+            raise ValueError('question id must be unique and have no surrounding whitespace')
+        ids.add(rule['id'])
+        if rule.get('kind') not in {'text', 'numeric'}:
+            raise ValueError('question kind must be text or numeric')
+        for field in ('items', 'allowed_values'):
+            entries = rule[field]
+            if not isinstance(entries, list) or any(not isinstance(v, str) or not v.strip() for v in entries):
+                raise ValueError(f'{field} must be a list of nonempty strings')
+            if len(set(entries)) != len(entries):
+                raise ValueError(f'{field} must not contain duplicates')
+        for field in ('require_unit', 'require_experimental'):
+            if type(rule[field]) is not bool:
+                raise ValueError(f'{field} must be boolean')
+        if 'emission_type' in rule and (not isinstance(rule['emission_type'], str) or not rule['emission_type'].strip()):
+            raise ValueError('emission_type must be nonempty text')
+        normalized.append(rule)
+    return copy.deepcopy(dict(templates=templates, questions=normalized))
 
-The answer should be provided exclusively in JSON format, following the example structure below:
-{
-    "Study_location": {
-        "value": "Example location",
-        "evidence": "Exact source quote",
-        "confidence_lv": 100
-    },
-    "Study_period": {
-        "value": "2003-2017",
-        "evidence": "Exact source quote",
-        "confidence_lv": 80
-    }
-}
-"""
 
-# Q2-4: Emission factors — parameterized by gas type (co2/ch4/n2o)
-# Each fuel × combustion type is a separate item (e.g. Forest_smoldering)
-# Extracted as numeric items, ensembled via ensemble_utils_value
-# {emission} is replaced by the gas name via wildfire_question_EFQuery()
-wildfire_question_B_ef_details = """
-What are the emission factors for {emission} associated with various types of fuels? Answer the above question and provide direct evidence. 
+def definition(domain: str, domain_cfg: dict | None = None) -> dict:
+    return validate_definition(domain_cfg['question_set'] if domain_cfg and 'question_set' in domain_cfg else _builtin(domain))
 
-Note: 
-1. Emission factors: The amount of a specific greenhouse gas released when a unit of fuel is burned or consumed. 
-Usually measured in mass (e.g., g of {emission} per kg of dry mass). Depends on the type of fuel and how it is used.
-2. Various types of fuels: Different materials used as energy sources, such as forests, peatland, crop residues. 
-List None of these examples if there are no relevant information. 
-If the fuels are mentioned yet without relevant information, the value should be set to 999999 and confidence_lv set to -1.
-3. Evidence refers to directly quoting the exact text or the titles of tables from the article. Do not perform any paraphrasing. 
-Directly extract the content (full sentence or the Table titles) from the article that supports your answers. 
-4. Find the combustion condition, use results only from the following selections (smoldering, flamming, mixed, None) 
-Put it in the name as a unique (e.g, Forest_smoldering or Forest_flaming or Forest_mixed or Forest_None)
-5. Fill in the MCE value (measured combustion efficiency) if it is mentioned in the paper, otherwise None
-6. Note that for experimental research paper, there may be multiple times of experimental results on the same fuel with different estimates, 
-list all of them with markers in experimental key. 
-7. Mark the key of experimental as True if the value is from experiments, mark the key of experimental as Ref if the value is from references.
 
-The answer should be provided exclusively in JSON format, following the example structure below:
-{{
-    "Forest_smoldering": {{
-        "value": 1675,
-        "evidence": "Table 2, emission factors for forest combustion",
-        "confidence_lv": 95,
-        "mce": null,
-        "experimental": "Ref"
-    }},
-    "Forest_flamming": {{
-        "value": 1755,
-        "evidence": "Table 2, emission factors for forest combustion",
-        "confidence_lv": 95,
-        "mce": null,
-        "experimental": "Ref"
-    }}
-}}
-"""
+def questions_for_domain(domain: str, domain_cfg: dict | None = None) -> list[str]:
+    return [q['prompt'] for q in definition(domain, domain_cfg)['questions']]
+
+
+def question_rule(domain: str, index: int, domain_cfg: dict | None = None) -> dict:
+    questions = definition(domain, domain_cfg)['questions']
+    if type(index) is not int or not 1 <= index <= len(questions):
+        raise ValueError('question index is outside the configured list')
+    return questions[index - 1]
+
+
+def emission_type_for_question(domain: str, question_index: int, domain_cfg: dict | None = None):
+    return question_rule(domain, question_index, domain_cfg).get('emission_type')
 
 
 def wildfire_question_EFQuery(emission: str) -> str:
-    return wildfire_question_B_ef_details.format(emission=emission)
+    return _builtin('wildfire')['legacy']['wildfire_question_B_ef_details'].format(emission=emission)
 
 
-def questions_for_domain(domain: str):
-    d = domain.lower()
-    if d.startswith("aqua"):
-        return [aqua_question_A_meta, aqua_question_B_experiment, aqua_question_C_flux]
-    if d.startswith("wild"):
-        return [
-            wildfire_question_A_meta,
-            wildfire_question_EFQuery("co2"),
-            wildfire_question_EFQuery("ch4"),
-            wildfire_question_EFQuery("n2o"),
-        ]
-    raise ValueError(f"Unsupported domain: {domain}. Expected aqua or wildfire.")
-
-
-def emission_type_for_question(domain: str, question_index: int):
-    if domain.lower().startswith("wild") and question_index > 1:
-        return {2: "co2", 3: "ch4", 4: "n2o"}.get(question_index)
-    return None
+def __getattr__(name: str):
+    """Preserve legacy imports while keeping every research prompt outside Python."""
+    templates = {'message_system_v2': 'system', 'message_system_v2_output': 'instruction',
+                 'message_system_ragQuery': 'verifier_system', 'checker_requery': 'verifier_instruction',
+                 'checker_requeryFull': 'verifier_full'}
+    if name in templates:
+        return _builtin('aqua')['templates'][templates[name]]
+    questions = {'aqua_question_A_meta': ('aqua', 0), 'aqua_question_B_experiment': ('aqua', 1),
+                 'aqua_question_C_flux': ('aqua', 2), 'wildfire_question_A_meta': ('wildfire', 0)}
+    if name in questions:
+        domain, index = questions[name]
+        return _builtin(domain)['questions'][index]['prompt']
+    if name == 'wildfire_question_B_ef_details':
+        return _builtin('wildfire')['legacy'][name]
+    raise AttributeError(name)

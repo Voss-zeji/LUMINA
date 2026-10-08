@@ -9,7 +9,7 @@
 
 LUMINA 是用于定量科学综合的多模型框架。它结合文献结构化抽取、支持证据的交叉核验和模型共识确认，减少无依据的模型输出，构建可追溯的科研数据集。
 
-本仓库提供 Aqua 和 Wildfire 科研流程，以及 Voss Agent 运行模式。
+本仓库提供可配置的文献抽取、交叉核验与共识确认流水线。Aqua 和 Wildfire 是内置研究配置，也可仅编辑配置接入新的文本或数值研究主题。
 
 ## 1. 科研目的
 
@@ -63,7 +63,7 @@ flowchart TD
 | **Wildfire——生物质燃烧** | Q1 | 研究地点与研究时期 |
 | | Q2–Q4 | CO2、CH4、N2O 排放因子，燃料与燃烧条件、MCE、实验值或文献引用值标记 |
 
-具体问题和输出要求见 [`lumina/prompts.py`](lumina/prompts.py)。
+具体问题和输出要求见 [Aqua 配置](configs/aqua/questions.toml)与 [Wildfire 配置](configs/wildfire/questions.toml)。
 
 ## 4. 程序流程
 
@@ -80,33 +80,21 @@ flowchart TD
 
 保存的 Markdown 保持完整，下游读取时使用 References、Acknowledgments 或 Appendix 标题之前的正文。默认检索参数为 2,048 字符切块、20% 重叠，并取最佳匹配片段前后各一个相邻片段。
 
-### 传统模式与 Agent 模式
-
-两种模式调用同一套科研流程。
-
-| | 传统模式 | Voss Agent 模式 |
-|---|---|---|
-| 入口 | `--domain` / `--stage` | `run`、`resume` 及控制命令 |
-| 输入 | `config.py` 中的领域目录 | 显式文献列表与独立输入快照 |
-| 进度 | 阶段文件与任务指纹 | 持久化 SQLite 状态、任务与请求回执 |
-| 执行 | 指定阶段或完整流程 | 试跑、人工批准、批量执行与最终完整性检查 |
-| 成本记录 | 输出中的请求信息 | 调用次数、token、费用、运行时间预算及请求账本 |
-| 输出 | 配置的领域目录 | `runs/<run_id>/outputs/R<round>/` 与 JSON 报告 |
+### 使用流程
 
 ```mermaid
 flowchart LR
-    Plan["冻结输入、模型与预算"] --> Trial["试跑选定文献"]
-    Trial --> Approval["审核原文、结果与费用"]
-    Approval -->|"批准后 resume"| Batch["处理完整文献列表"]
-    Batch --> QC["检查任务与文件完整性"]
-    QC --> Done["保存完成记录"]
+    Config["填写研究配置"] --> Trial["少量文献试跑"]
+    Trial --> Review["查看结果、原文证据与费用"]
+    Review -->|"明确确认"| Batch["继续处理整批文献"]
+    Batch --> Output["结果、候选明细与运行报告"]
 ```
 
-Agent 在批量阶段复用试跑已完成的请求，各轮次分别保存结果。试跑审核时，研究者检查原文证据、单位、处理归属及费用，再决定是否继续。工程完成状态与独立科学评价分别记录。
+程序保存输入快照、请求回执及预算记录。批量处理复用试跑已完成的请求；再次运行同一命令可恢复进度。程序完成与独立科学评价分别记录。
 
 ## 5. 安装与配置
 
-使用 Python 3.12 和独立环境：
+使用 Python 3.12：
 
 ```bash
 git clone https://github.com/Voss-zeji/LUMINA.git
@@ -114,83 +102,56 @@ cd LUMINA
 python -m pip install -r requirements.txt
 ```
 
-输入 PDF 时，安装提供 `PdfConverter`、`create_model_dict`、`text_from_rendered` 接口的兼容 `marker-pdf` 版本；也可直接提供 Markdown。
+PDF 输入需要另行安装兼容的 `marker-pdf`，并明确允许准备转换资源；Markdown 输入无需该依赖。
 
-复制配置模板：
+复制 `configs/aqua`、`configs/wildfire` 或 `configs/generic` 为自己的研究目录。例如 PowerShell：
 
 ```powershell
-# PowerShell
-Copy-Item config.example.py config.py
+Copy-Item configs/aqua configs/my-study -Recurse
+Copy-Item configs/my-study/secrets.example.toml configs/my-study/secrets.local.toml
 ```
+
+Bash：
 
 ```bash
-# Bash
-cp config.example.py config.py
+cp -R configs/aqua configs/my-study
+cp configs/my-study/secrets.example.toml configs/my-study/secrets.local.toml
 ```
 
-| 配置项 | 填写内容 |
+| 文件 | 填写内容 |
 |---|---|
-| `FULL_LLM_POOL` / `SELECTED_KEYS` | 模型名称、服务来源与选定的抽取模型 |
-| `LLM_SETTINGS` | API 密钥、chat base URL 与 `supports_json_mode` |
-| `EMBEDDING_MODEL` | 嵌入模型、服务来源与完整 embedding 请求 URL |
-| `RUN` | 轮次、温度、切块大小及重叠率、上下文扩展、核验阈值 |
-| `DOMAINS` | 领域描述、问题编号及传统模式的输入输出目录 |
+| `project.toml` | 模型及接口、研究名称、轮次、检索参数、试跑数量、输出位置、模型价格与四项预算 |
+| `papers.txt` | 每行一个 PDF 或 Markdown 路径 |
+| `questions.toml` | 全部提示词、问题列表、文本／数值类型、字段与单位要求 |
+| `secrets.local.toml` | API 密钥；此文件被 Git 忽略 |
 
-chat 使用 OpenAI 兼容的 `chat.completions` 接口，embedding 使用直接 HTTP POST。`supports_json_mode=True` 请求 JSON 对象，随后由 JSON5 解析器和本地字段规则处理。密钥保存在被 Git 忽略的本地 `config.py` 中。
+所有相对路径以配置目录为基准。示例中的占位内容必须替换为真实设置；模型价格不能猜测。配置读取使用 Python 标准库 `tomllib`，无需新增配置解析依赖。
 
-选择 M 个抽取模型时，核验阈值应在 1 到 M − 1 之间，`min_consensus_models` 必须是 1 到 M 之间的整数。省略共识设置时，默认采用完整所选模型池的严格多数（`M // 2 + 1`），并写入冻结的 Agent 规格。这是可配置的默认值，不是稿件规定的固定实验数值。双模型示例使用 `min_cross_scores: [1]` 和 `min_consensus_models: 2`。更改门槛或科学算法后需要新建 Agent run；已有结果表不会被自动改写。
+新增主题时，编辑问题配置中的稳定 `id`、`prompt`、`kind`、`items`、`allowed_values`、`require_unit` 和 `require_experimental`。回答继续使用 `item/value/evidence/confidence_lv` 标量结构，按问题增加 `unit/experimental`；新增算法或嵌套回答结构需要 Python 开发。
 
 ## 6. 运行任务
 
-### 传统科研流程
-
-将文献放入配置的领域目录后运行：
+先检查配置，此步骤不调用模型，也不创建运行目录：
 
 ```bash
-python run_pipeline.py --config config.py --domain aqua --stage all
-python run_pipeline.py --config config.py --domain wildfire --stage all
+python run_pipeline.py --config configs/my-study/project.toml --check
 ```
 
-已有前序产物时，可以选择单个阶段：
+执行或恢复同一研究：
 
 ```bash
-python run_pipeline.py --config config.py --domain wildfire --stage ensemble
+python run_pipeline.py --config configs/my-study/project.toml
 ```
 
-### Agent 执行
+第一次执行先完成少量文章。检查显示的 `smoke_report.json`、结果表及原文证据，确认单位和实验归属后，在终端输入 `y` 继续整批。无交互输入时程序暂停；在交互终端重新执行相同命令即可确认，无需查找内部审批编号。
 
-复制 [`research.example.json`](research.example.json) 为 `research.json`，填写文献路径、轮次、试跑文献、模型价格及依据、token 上限，以及 `max_calls`、`max_tokens`、`max_cost`、`max_runtime` 四项预算，替换模板中的 `null` 和 `REPLACE`。需要准备 PDF 模型资源时，设置 `allow_pdf_resources: true`。
+默认 `project.stage = "all"`。改为 `prepare`、`examiner`、`composite`、`embeddings` 或 `cross` 时，执行所需前序步骤并在该阶段完成后暂停；改回 `all` 继续。`ensemble` 完成当前试跑或批量范围的全部科学阶段，试跑确认仍然生效。
 
-创建运行并查看计划，此步骤不发送模型请求：
+相同 `project.run_id` 对应同一次运行。模型、文章、提示词、问题规则、科研参数或预算改变时，应更换运行标识；程序拒绝混用旧结果。`project.stage` 是本次执行的停止位置，可以调整。退出码 0 表示完成或检查成功，2 表示暂停／需要确认，1 表示错误。
 
-```bash
-python run_pipeline.py run --spec research.json --config config.py --runs-dir runs --run-id study-001 --dry-run
-python run_pipeline.py status --runs-dir runs --run-id study-001
-```
+`max_runtime` 包含从运行创建起的等待与审核时间。结果未知的模型请求保留费用占用和回执，须核对后处理，不盲目重试。详细记录见输出目录的 `reports/`。
 
-继续同一次运行，执行试跑：
-
-```bash
-python run_pipeline.py resume --runs-dir runs --run-id study-001 --config config.py
-```
-
-审核 `reports/smoke_report.json` 和原始文献，从 `status` 读取待批准的 gate ID，并替换下方 `GATE_ID`：
-
-```bash
-python run_pipeline.py approve --runs-dir runs --run-id study-001 --gate-id GATE_ID --reason "Reviewed trial evidence, outputs, and costs"
-python run_pipeline.py resume --runs-dir runs --run-id study-001 --config config.py
-python run_pipeline.py report --runs-dir runs --run-id study-001
-```
-
-`approve` 记录批准决定，`resume` 继续执行。退出码 2 表示暂停或需要人工处理。`max_runtime` 从运行创建时开始计算，包含等待与审核时间。响应先记录后解析，执行结果不确定的请求保留供人工核对。暂停、恢复和请求控制详见 [Agent 指南](AGENT_GUIDE.md)。
-
-与独立准备的参考集比较：
-
-```bash
-python run_pipeline.py evaluate --runs-dir runs --run-id study-001 --gold independent-gold.json --output-dir evaluation-study-001
-```
-
-评价器在生产运行目录之外写入结果，参考格式见 [`gold.example.json`](gold.example.json)。
+旧 Python 配置入口仍可用，迁移说明见 [配置指南](CONFIGURATION.md)。旧运行目录不会自动改写；规格不兼容时使用原版本恢复或新建运行。需要高级诊断、独立参考集评价或手工请求核对时，见 [高级运行指南](AGENT_GUIDE.md)。
 
 ## 7. 结果与数据组织
 
@@ -200,7 +161,7 @@ python run_pipeline.py evaluate --runs-dir runs --run-id study-001 --gold indepe
 - **候选表**：按问题保留各模型回答、证据及来源。
 - **核验记录**：保存每个核验模型的判断及引用原文。
 - **结果表**：`00_full` 和配置的 `MiniCrossNN` 版本分别产出 `Ensemble_Result` 与 `Ensemble_All-Standard-Answers`。
-- **Agent 记录**：保留输入快照、冻结配置、请求回执、预算和执行报告。
+- **运行记录**：保留输入快照、冻结配置、请求回执、预算和执行报告。
 
 汇总在单篇文献内规范化元数据、数值和单位字符串。选择后续分析数据时，应同时查看结果表与候选明细。
 
@@ -223,11 +184,10 @@ runs/<run_id>/
 
 ## 8. 项目资料
 
-- [抽取提示词与领域问题](lumina/prompts.py)
-- [模型及目录配置示例](config.example.py)
-- [Agent 研究规格示例](research.example.json)
-- [Agent 操作指南](AGENT_GUIDE.md)
-- [科研流程与 Agent 工作流](LUMINA_AGENTIC_WORKFLOW.md)
+- [Aqua 配置](configs/aqua/project.toml) · [Wildfire 配置](configs/wildfire/project.toml) · [新主题模板](configs/generic/project.toml)
+- [配置参考与迁移说明](CONFIGURATION.md)
+- [高级运行与诊断](AGENT_GUIDE.md)
+- [独立参考集格式](gold.example.json)
 
 本 Voss fork 基于 [billy31/LUMINA](https://github.com/billy31/LUMINA)，保留 [Apache License 2.0](LICENSE) 开源协议。
 

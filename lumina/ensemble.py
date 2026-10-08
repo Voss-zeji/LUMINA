@@ -9,8 +9,6 @@ from . import ensemble_utils_value as euv
 from . import prompts
 from .common import canonical_paper_id, ensure_directory_exists, read_composite, write_dataframe
 
-_AQUA_Q1_ITEMS = ["Study_location", "Study_location_detail", "Study_period", "Latitude", "Longitude"]
-
 
 # ---- Unfiltered diagnostic baseline: preserve the legacy aggregation policies ----
 # Meta items (Q1 both domains, Q2 aqua):
@@ -21,12 +19,13 @@ _AQUA_Q1_ITEMS = ["Study_location", "Study_location_detail", "Study_period", "La
 #   → ensemble_utils_value.ensemble_numeric_dataframe()
 #   → Numeric normalization → item equivalence → voting → most common wins
 #   → Decimal-majority mode: cross-item aggregation by numeric value
-def _ensemble_subset(domain: str, question_index: int, subset: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+def _ensemble_subset(domain: str, question_index: int, subset: pd.DataFrame, domain_cfg=None) -> tuple[pd.DataFrame, pd.DataFrame]:
+    rule = prompts.question_rule(domain, question_index, domain_cfg)
     result = pd.DataFrame()
     detail = pd.DataFrame()
     if subset.empty:
         common = ['paper_index', 'question_index', 'item']
-        numeric = question_index != 1 and not (domain == 'aqua' and question_index == 2)
+        numeric = rule['kind'] == 'numeric'
         if numeric:
             result = pd.DataFrame(columns=common + ['ensemble_value', 'unit', 'unit_is_explicit', 'vote_count', 'models'])
             detail = pd.DataFrame(columns=common + ['normalized_value', 'scalar_value', 'unit', 'unit_is_explicit', 'count', 'confidence_sum', 'models'])
@@ -35,38 +34,15 @@ def _ensemble_subset(domain: str, question_index: int, subset: pd.DataFrame) -> 
             detail = pd.DataFrame(columns=common + ['normalized_value', 'count', 'fraction'])
         return result, detail
 
-    if domain == "aqua":
-        if question_index == 1:
-            for item_content in _AQUA_Q1_ITEMS:
-                items = subset[subset.item == item_content]
-                if items.empty:
-                    continue
-                r = eum.ensemble_dataframe(items)
-                d = eum.ensemble_dataframe_all_data(items)
-                result = pd.concat([result, r], axis=0)
-                detail = pd.concat([detail, d], axis=0)
-        elif question_index == 2:
-            items = subset[subset.item == "Specie"]
-            if not items.empty:
-                result = eum.ensemble_dataframe(items)
-                detail = eum.ensemble_dataframe_all_data(items)
-        else:
-            result = euv.ensemble_numeric_dataframe(subset)
-            detail = euv.ensemble_numeric_dataframe_all_data(subset)
-        return result, detail
-
-    if question_index == 1:
-        for item_content in _AQUA_Q1_ITEMS:
-            items = subset[subset.item == item_content]
-            if items.empty:
-                continue
-            r = eum.ensemble_dataframe(items)
-            d = eum.ensemble_dataframe_all_data(items)
-            result = pd.concat([result, r], axis=0)
-            detail = pd.concat([detail, d], axis=0)
-    else:
-        result = euv.ensemble_numeric_dataframe(subset)
-        detail = euv.ensemble_numeric_dataframe_all_data(subset)
+    if rule['items']:
+        subset = subset[subset.item.isin(rule['items'])]
+    if rule['kind'] == 'numeric':
+        return euv.ensemble_numeric_dataframe(subset), euv.ensemble_numeric_dataframe_all_data(subset)
+    for item in rule['items'] or list(subset.item.unique()):
+        items = subset[subset.item == item]
+        if not items.empty:
+            result = pd.concat([result, eum.ensemble_dataframe(items)], axis=0)
+            detail = pd.concat([detail, eum.ensemble_dataframe_all_data(items)], axis=0)
     return result, detail
 
 
@@ -82,15 +58,16 @@ def consensus_threshold(models: list[str], run_cfg: dict) -> int:
 
 def confirm_consensus(domain: str, question_index: int, frame: pd.DataFrame,
                       models: list[str], verification_threshold: int,
-                      baseline_threshold: int) -> tuple[pd.DataFrame, pd.DataFrame]:
+                      baseline_threshold: int, domain_cfg=None) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Accept only the unique mode of verified candidates with enough source models.
 
     Votes belong to independent generating models, not rows or verifier flags.
     Units and explicit experiment markers delimit comparable observations.
     Existing value normalizers remain authoritative; no unit conversion is added.
     """
-    numeric = question_index != 1 and not (domain == 'aqua' and question_index == 2)
-    result, detail = _ensemble_subset(domain, question_index, frame.iloc[:0])
+    rule = prompts.question_rule(domain, question_index, domain_cfg)
+    numeric = rule['kind'] == 'numeric'
+    result, detail = _ensemble_subset(domain, question_index, frame.iloc[:0], domain_cfg)
     extra = ['accepted', 'aggregation_mode', 'verification_threshold', 'consensus_threshold',
              'models', 'n_models', 'experimental', 'support_candidate_ids', 'gate_reason']
     result = result.reindex(columns=list(dict.fromkeys([*result.columns, *extra])))
@@ -105,7 +82,7 @@ def confirm_consensus(domain: str, question_index: int, frame: pd.DataFrame,
         if not float(row['cross_score']) >= verification_threshold:
             continue
         item = str(row['item']).strip()
-        if not numeric and item not in (_AQUA_Q1_ITEMS if question_index == 1 else ['Specie']):
+        if rule['items'] and item not in rule['items']:
             continue
         if numeric:
             normalized, scalar, unit, explicit = euv._normalize_value_unit_pair(row.get('value'), row.get('unit'))
@@ -164,17 +141,17 @@ def confirm_consensus(domain: str, question_index: int, frame: pd.DataFrame,
 
 def _run_variant(domain: str, question_index: int, df: pd.DataFrame, out_dir: Path, label: str,
                  models: list[str] | None = None, verification_threshold: int | None = None,
-                 baseline_threshold: int | None = None) -> None:
+                 baseline_threshold: int | None = None, domain_cfg=None) -> None:
     if verification_threshold is not None:
         result, detail = confirm_consensus(domain, question_index, df, models,
-                                           verification_threshold, baseline_threshold)
+                                           verification_threshold, baseline_threshold, domain_cfg)
     else:
-        result, detail = _ensemble_subset(domain, question_index, df.iloc[:0])
+        result, detail = _ensemble_subset(domain, question_index, df.iloc[:0], domain_cfg)
         df = df.copy()
         df['paper_index'] = df['paper_index'].map(canonical_paper_id)
         for paper_index in sorted(df.paper_index.dropna().unique()):
             subset = df[df.paper_index == paper_index].copy()
-            r, d = _ensemble_subset(domain, question_index, subset)
+            r, d = _ensemble_subset(domain, question_index, subset, domain_cfg)
             result = pd.concat([result, r], axis=0)
             detail = pd.concat([detail, d], axis=0)
         for table in (result, detail):
@@ -219,7 +196,7 @@ def validate_cross_coverage(frame: pd.DataFrame, models: list[str] | None = None
 def run_ensemble_for_domain(domain: str, domain_cfg: dict, run_cfg: dict,
                             selected_model_names: list[str] | None = None) -> None:
     ensure_directory_exists(domain_cfg["ensemble_dir"])
-    questions = prompts.questions_for_domain(domain)
+    questions = prompts.questions_for_domain(domain, domain_cfg)
     for question_index in range(1, len(questions) + 1):
         composite_file = Path(domain_cfg["composite_dir"]) / f"{domain_cfg['composite_prefix']}_Q{question_index:02d}.xlsx"
         if not composite_file.exists():
@@ -229,8 +206,8 @@ def run_ensemble_for_domain(domain: str, domain_cfg: dict, run_cfg: dict,
         baseline_threshold = consensus_threshold(models, run_cfg) if run_cfg.get('min_cross_scores') else None
         if run_cfg.get('min_cross_scores'):
             validate_cross_coverage(df, selected_model_names)
-        _run_variant(domain, question_index, df, Path(domain_cfg["ensemble_dir"]) / "00_full", "full")
+        _run_variant(domain, question_index, df, Path(domain_cfg["ensemble_dir"]) / "00_full", "full", domain_cfg=domain_cfg)
         for min_score in run_cfg.get("min_cross_scores", []):
             _run_variant(domain, question_index, df,
                 Path(domain_cfg["ensemble_dir"]) / f"MiniCross{min_score:02d}", f"MiniCross{min_score:02d}",
-                models, min_score, baseline_threshold)
+                models, min_score, baseline_threshold, domain_cfg)

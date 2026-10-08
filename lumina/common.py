@@ -287,7 +287,7 @@ def read_composite(path: str | Path) -> pd.DataFrame:
     return frame
 
 
-def validate_answers(frame: pd.DataFrame, domain: str | None = None, question_index: int | None = None) -> None:
+def validate_answers(frame: pd.DataFrame, domain: str | None = None, question_index: int | None = None, domain_cfg: dict | None = None) -> None:
     required = {"item", "value", "evidence", "confidence_lv"}
     if frame.empty or not required.issubset(frame.columns):
         raise ValueError(f"empty or invalid answer schema; required {sorted(required)}")
@@ -303,28 +303,47 @@ def validate_answers(frame: pd.DataFrame, domain: str | None = None, question_in
         raise ValueError('evidence must be text or null')
     if domain is None:
         return
-    numeric = question_index != 1 and not (domain == 'aqua' and question_index == 2)
+    from . import prompts
+    rule = prompts.question_rule(domain, question_index, domain_cfg)
+    numeric = rule.get("kind") == "numeric"
+    rule_items = rule.get("items", [])
+    allowed_values = rule.get("allowed_values", [])
+    require_unit = rule.get("require_unit", False)
+    require_experimental = rule.get("require_experimental", False)
+
     if numeric and frame['value'].map(lambda v: isinstance(v, bool) or
         (isinstance(v, Real) and not pd.isna(v) and not math.isfinite(v))).any():
         raise ValueError('numeric answer value must be finite and not boolean')
-    allowed = {"Study_location", "Study_period"}
-    if domain == "aqua" and question_index == 1:
-        allowed |= {"Study_location_detail", "Latitude", "Longitude"}
-    if question_index == 1 or (domain == "aqua" and question_index == 2):
-        if domain == "aqua" and question_index == 2:
-            allowed = {"Specie"}
-        if not frame["item"].isin(allowed).all():
-            raise ValueError(f"unexpected metadata item; allowed {sorted(allowed)}")
-    elif domain == "aqua":
+    if rule_items:
+        if not frame["item"].isin(rule_items).all():
+            raise ValueError(f"unexpected metadata item; allowed {sorted(rule_items)}")
+
+    missing_strings = {'', '999999', 'none', 'nan', 'null', 'n/a', 'na', 'not provided', 'not specified', '[]'}
+    valid_value = frame["value"].notna() & ~frame["value"].astype(str).str.strip().str.lower().isin(missing_strings)
+
+    if allowed_values:
+        allowed_str_lower = {str(v).strip().lower() for v in allowed_values}
+        is_allowed = frame['value'].astype(str).str.strip().str.lower().isin(allowed_str_lower)
+        if (valid_value & ~is_allowed).any():
+            raise ValueError(f"value not in allowed_values; allowed {sorted([str(v) for v in allowed_values])}")
+
+    if require_unit:
         if "unit" not in frame.columns:
-            raise ValueError("Aqua numeric answers require a unit field (null permitted only for missing values)")
-        missing_strings = {'', '999999', 'none', 'nan', 'null', 'n/a', 'na', 'not provided', 'not specified', '[]'}
-        valid_value = frame["value"].notna() & ~frame["value"].astype(str).str.strip().str.lower().isin(missing_strings)
+            raise ValueError("numeric answers require a unit field (null permitted only for missing values)")
         missing_unit = frame["unit"].isna() | frame["unit"].astype(str).str.strip().str.lower().isin(missing_strings)
         if (valid_value & ~frame['unit'].map(lambda v: isinstance(v, str))).any():
-            raise ValueError('Aqua unit must be text')
+            raise ValueError('unit must be text')
         if (valid_value & missing_unit).any():
-            raise ValueError("Aqua numeric value has no unit")
+            raise ValueError("numeric value has no unit")
+
+    if require_experimental:
+        if "experimental" not in frame.columns:
+            raise ValueError("answers require an experimental field")
+        if frame['experimental'].map(lambda v: isinstance(v, (dict, list))).any():
+            raise ValueError("experimental must be a scalar or null")
+        missing_exp = frame["experimental"].isna() | frame["experimental"].astype(str).str.strip().str.lower().isin(missing_strings)
+        if (valid_value & missing_exp).any():
+            raise ValueError("answer value has no experimental marker")
 
 
 def model_name(llm: Dict[str, Any]) -> str:

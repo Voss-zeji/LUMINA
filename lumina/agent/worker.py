@@ -37,7 +37,7 @@ def _expired(run):
         return result
 
 
-def supervise(run_dir, config_path, *, worker_command=None):
+def supervise(run_dir, config_path, *, worker_command=None, progress=False):
     run = Path(run_dir).resolve()
     with Store(run) as store:
         manifest = validate_manifest(run, store.snapshot()["run"]["spec_hash"])
@@ -51,8 +51,10 @@ def supervise(run_dir, config_path, *, worker_command=None):
     command = worker_command or [sys.executable, "-m", "lumina.agent.worker", "--run-dir", str(run),
                                  "--config", str(Path(config_path).resolve())]
     try:
-        child = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", timeout=remaining,
+        child = subprocess.run(command, stdout=subprocess.PIPE, stderr=None if progress else subprocess.PIPE,
+                               text=True, encoding="utf-8", timeout=remaining,
                                cwd=Path(__file__).resolve().parents[2],
+                               env={**os.environ, 'PYTHONIOENCODING': 'utf-8'},
                                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
     except subprocess.TimeoutExpired:
         # subprocess.run kills and waits for this child; the OS releases its lease.
@@ -78,8 +80,12 @@ def main():
         from run_pipeline import load_config
         from .controller import execute
         config = load_config(args.config)
-        with contextlib.redirect_stdout(sys.stderr):
-            result = execute(args.run_dir, config)
+        with contextlib.ExitStack() as stack:
+            output = sys.stderr
+            if hasattr(config, 'PROJECT'):
+                output = stack.enter_context((Path(args.run_dir) / 'reports' / 'pipeline.log').open('a', encoding='utf-8'))
+            with contextlib.redirect_stdout(output):
+                result = execute(args.run_dir, config)
     except (Exception, SystemExit) as exc:
         result = {"state": "FATAL_ERROR", "error": error_details(exc, config.LLM_SETTINGS if config else {})}
     print(json.dumps(result, ensure_ascii=False))

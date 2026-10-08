@@ -109,14 +109,18 @@ def independent_verifiers(llm_dicts: dict, selected_model_names: list[str], inpu
             if model_name(llm) in selected_model_names and model_name(llm) != input_model]
 
 
-def verifier_signatures(llm_dicts: dict, llm_settings: dict, embedding_model: dict, run_cfg: dict) -> dict[str, str]:
+def verifier_signatures(llm_dicts: dict, llm_settings: dict, embedding_model: dict, run_cfg: dict,
+                        domain_cfg: dict | None = None) -> dict[str, str]:
+    templates = (domain_cfg or {}).get('question_set', {}).get('templates')
+    if templates is None:
+        templates = prompts.definition('aqua')['templates']
     result = {}
     for llm in llm_dicts.values():
         provider = llm_settings.get(llm.get('source'), {})
         result[model_name(llm)] = fingerprint(dict(version=2, model=llm['model'], source=llm.get('source'), endpoint=provider.get('url'),
             json_mode=provider.get('supports_json_mode', True), temperature=run_cfg['temperature'],
             embedding=_embedding_spec(embedding_model, llm_settings, run_cfg), extension=run_cfg['text_extension'],
-            system=prompts.message_system_ragQuery, checker=prompts.checker_requery))
+            system=templates['verifier_system'], checker=templates['verifier_instruction']))
     return result
 
 
@@ -136,13 +140,14 @@ def cross_validate_domain(domain: str, domain_cfg: dict, llm_dicts: dict, llm_se
                           embedding_model: dict, run_cfg: dict, selected_model_names: list[str],
                           runtime=None) -> None:
     papers = paper_markdowns(domain_cfg['markdown_dir'])
-    signatures = verifier_signatures(llm_dicts, llm_settings, embedding_model, run_cfg)
+    templates = prompts.definition(domain, domain_cfg)['templates']
+    signatures = verifier_signatures(llm_dicts, llm_settings, embedding_model, run_cfg, domain_cfg)
     # Composite rows carry the short display name; task identity needs the full model ID.
     full_ids = {model_name(llm): llm['model'] for llm in llm_dicts.values()}
     transport = {} if runtime is None else {'runtime': runtime}
     prepared = {}
     failed = []
-    for question_index in range(1, len(prompts.questions_for_domain(domain)) + 1):
+    for question_index in range(1, len(prompts.questions_for_domain(domain, domain_cfg)) + 1):
         file = Path(domain_cfg['composite_dir']) / f"{domain_cfg['composite_prefix']}_Q{question_index:02d}.xlsx"
         if not file.exists():
             failed.append(f'missing composite: {file}')
@@ -203,8 +208,8 @@ def cross_validate_domain(domain: str, domain_cfg: dict, llm_dicts: dict, llm_se
                     start, raw = time.time(), None
                     try:
                         query_kwargs = {'temperature': run_cfg['temperature'], **transport}
-                        raw, token = llm_requery(llm, llm_settings, prompts.message_system_ragQuery.strip(),
-                            prompts.checker_requery.format(answer=evidence, context=context, key_topic=row['item']).strip(),
+                        raw, token = llm_requery(llm, llm_settings, templates['verifier_system'].strip(),
+                            templates['verifier_instruction'].format(answer=evidence, context=context, key_topic=row['item']).strip(),
                             **query_kwargs)
                         result = refineJsonString(raw)
                         if result.get('existing_flag') not in (0, 1) or not isinstance(result.get('direct_quote'), (str, type(None))):
