@@ -21,7 +21,7 @@ only. Real paper API runs are excluded from this implementation.
 | G3 Scientific integration | Custom questions propagate through every stage, rules and fingerprints | Passed custom topic with numeric Q1/text Q2; independent evaluator reads frozen rules |
 | G4 Simple execution | Check, trial, confirmation, resume, completed-run reuse | Passed in-process and real child-process TOML workflows without network |
 | G5 Documentation and compatibility | Bilingual quickstart, legacy entry retained, migration explained | Updated READMEs and CONFIGURATION.md; links, fences and TOML parsing checked |
-| G6 Acceptance | New topic, prior domain parity, isolation, budgets, no secret leaks, Windows/Linux | Local 398-test regression passed; final targeted 14 + 12 checks passed after review fixes; GitHub CI pending |
+| G6 Acceptance | New topic, prior domain parity, isolation, budgets, no secret leaks, Windows/Linux | Local 398-test regression and final targeted checks passed; live cross-platform evidence: [PR #6 checks](https://github.com/Voss-zeji/LUMINA/pull/6/checks) |
 
 ## Contracts
 
@@ -70,3 +70,7 @@ only. Real paper API runs are excluded from this implementation.
 - Initial GitHub run `37756701192`: Ubuntu passed all 399 tests; Windows passed 398
   with one test-only mismatch between an 8.3 temporary path and its resolved long
   name. The path assertion now normalizes both sides; no production change was needed.
+- Delivery: [PR #6](https://github.com/Voss-zeji/LUMINA/pull/6), branch
+  `feat/config-driven-workflow`. Its Windows and Ubuntu checks are the live
+  cross-platform acceptance record for the latest revision; both must be green.
+  The main branch remains unchanged until the PR is merged.
