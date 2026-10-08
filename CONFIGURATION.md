@@ -4,12 +4,28 @@ Use Python 3.12. Start with `configs/aqua`, `configs/wildfire`, or `configs/gene
 Each copy is a self-contained research definition; no Python edits are needed for
 new questions that use the existing text/numeric algorithms.
 
+## Install into your own venv / 自定义虚拟环境安装
+
+After cloning, run `python install.py --venv /path/to/your/venv` with Python 3.12
+(Windows example: `python install.py --venv "D:/envs/lumina"`). The installer creates
+or reuses that venv and uses its interpreter for every pip operation. With no path,
+it uses the active venv, otherwise the repository's `.venv`. Activate it afterwards
+or use the printed interpreter path for all pipeline commands.
+
+The default profile installs `requirements-pdf.txt`: runtime packages, pypdf and
+Marker 2.0.0. If Marker cannot install or import, setup reports the pypdf-only
+fallback explicitly. `--skip-marker` opts into that lightweight installation.
+`pip check` and import probes must pass before setup reports success. Package
+installation does not download Marker model weights or send scientific-model calls.
+The first PDF's model preparation/download time counts toward `max_runtime`, so
+include it in the initial run's time budget or prepare the resources beforehand.
+
 ## Files / 文件职责
 
 | File | Contents |
 |---|---|
 | `project.toml` | Study, models/providers, retrieval, execution, budgets, price evidence |
-| `papers.txt` | One explicit PDF or Markdown path per line; blank lines and `#` comments are ignored |
+| `papers.txt` | One source PDF per line by default; Markdown remains supported; blank lines and `#` comments are ignored |
 | `questions.toml` | Prompt templates and an ordered list of question rules |
 | `secrets.local.toml` | Local provider keys, copied from `secrets.example.toml`; never commit |
 
@@ -54,6 +70,38 @@ same frozen run. Costs and the wall-clock deadline are never reset on resume.
 
 四项预算必须显式填写。`max_runtime` 是从运行创建开始计算的秒数，包含等待审核时间。
 阶段选择不会清空已花费用、重置时间或跳过试跑确认。程序默认不使用顾问模型。
+
+## PDF preparation / PDF 转 Markdown
+
+The examples take PDFs and automatically produce `outputs/prepared/<paper_uid>.md`.
+Set conversion policy in the same main configuration:
+
+```toml
+[pdf]
+backend = "marker"
+fallback = "pypdf"
+```
+
+`marker` is the default. Import/model initialization failure, conversion failure or
+empty Marker text can use `pypdf` when enabled. Disable fallback with `"none"`.
+Choose `backend = "pypdf", fallback = "none"` for explicit text-only conversion.
+The fallback performs no OCR: it refuses encrypted documents and any page without
+extractable text instead of publishing an incomplete article. Review reading order
+and tables even when extraction succeeds.
+
+`project.allow_pdf_resources = true` in the shipped examples explicitly permits
+Marker to prepare/download its local OCR/layout weights on first PDF use. For an
+offline machine, prepare those model resources in advance or use the pypdf backend
+for text-bearing PDFs. This permission does not authorize scientific API calls
+outside the configured trial, approval and budget controls.
+
+Conversion policy participates in the frozen specification. Metadata records the
+source PDF hash, derived Markdown hash, converter name/version, fallback status and
+the primary error type. Trial/final reports include these in `preparation`, and the
+CLI highlights text-only conversion for review. Original PDF snapshots are retained.
+
+Official APIs: [Marker](https://github.com/datalab-to/marker),
+[pypdf extraction](https://pypdf.readthedocs.io/en/stable/user/extract-text.html).
 
 ## Questions and prompts / 问题及提示词
 

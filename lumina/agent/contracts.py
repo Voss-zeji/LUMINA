@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .. import ensemble, prompts
+from .. import ensemble, preparation, prompts
 from ..common import atomic_output, canonical_paper_id, filename_token, fingerprint, save_json
 
 FORMAT_VERSION = 1
@@ -224,7 +224,7 @@ class ResearchSpecification:
                     run=run, rounds=rounds, budget=budget, pricing=pricing, smoke_size=smoke_size,
                     smoke_paper_uids=sorted(smoke_uids),
                     advisor=advisor, allow_pdf_resources=allow_pdf,
-                    question_set=definition,
+                    question_set=definition, pdf=preparation.pdf_options(domain_cfg.get('pdf')),
                     questions=[dict(index=i, id=definition['questions'][i - 1]['id'],
                                     prompt_hash=fingerprint(q.strip("\n"))) for i, q in enumerate(questions, 1)],
                     scientific_code={name: file_hash(core / name) for name in SCIENTIFIC_FILES},

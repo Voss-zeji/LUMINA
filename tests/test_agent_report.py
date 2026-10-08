@@ -91,7 +91,8 @@ class ReportTests(unittest.TestCase):
              patch("lumina.agent.runtime.requests.post", return_value=self.embedding()) as post, \
              patch("lumina.agent.runtime.RunContext.sleep"):
             run = begin(request, config, self.root / "runs", dry_run=True)
-            execute(run, config)
+            result = execute(run, config)
+            self.assertEqual(result['state'], 'HUMAN_GATE_SMOKE', result)
             with Store(run) as store:
                 gate = next(g for g in store.gates() if g["kind"] == "smoke")
             approve(run, gate["gate_id"], "Reviewed synthetic smoke", config=config)

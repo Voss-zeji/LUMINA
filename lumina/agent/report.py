@@ -649,6 +649,13 @@ def write_report(runtime, name="final_report", *, paper_uids=None, final_qc=None
                                                          / (paper["paper_uid"] + ".md")))
         for paper in spec["papers"] if paper["paper_uid"] in scope
         and (runtime.run_dir / "outputs" / "prepared" / (paper["paper_uid"] + ".md")).is_file()}, {})
+    preparation_records = []
+    for paper in spec['papers']:
+        metadata = runtime.run_dir / 'outputs' / 'prepared' / (paper['paper_uid'] + '.meta.json')
+        if paper['paper_uid'] in scope and metadata.is_file():
+            record = load_json(metadata)
+            if isinstance(record, dict):
+                preparation_records.append(record)
     signatures = _guard(diagnostics, "verifier_signatures", lambda: _signatures(spec), {})
     composites = _guard(diagnostics, "composites",
                         lambda: _composites(runtime, scope, index_by_uid, diagnostics), {})
@@ -689,6 +696,7 @@ def write_report(runtime, name="final_report", *, paper_uids=None, final_qc=None
         inputs=[{k: p[k] for k in ("paper_uid", "sha256", "display_name")}
                 for p in spec["papers"] if p["paper_uid"] in scope],
         models=spec["models"], scientific_code=spec["scientific_code"], budget=totals,
+        preparation=preparation_records,
         budget_limits=spec["budget"],
         pricing_basis={m: p["basis"] for m, p in spec["pricing"].items()},
         extraction=extraction, verification=verification, thresholds=thresholds,

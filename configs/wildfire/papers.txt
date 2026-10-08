@@ -1,3 +1,3 @@
-# One PDF/Markdown path per line, relative to this directory.
-# 每行一篇文章，替换下方路径；支持中文与空格。
-REPLACE/article.md
+# One PDF path per line; Markdown is generated automatically.
+# 每行一篇原始 PDF；程序自动生成 Markdown。
+REPLACE/article.pdf

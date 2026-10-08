@@ -13,7 +13,12 @@ secrets = "secrets.local.toml"
 rounds = [1]
 smoke_size = 1
 stage = "all"
-allow_pdf_resources = false
+allow_pdf_resources = true
+
+# Marker may download local OCR/layout model weights on first use.
+[pdf]
+backend = "marker"
+fallback = "pypdf"
 
 [models.model_a]
 model = "REPLACE-model-a"

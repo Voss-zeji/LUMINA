@@ -43,6 +43,10 @@ def _summary(run: Path, result: dict) -> list[dict]:
     if result.get('error') or result.get('reason'):
         print(result.get('error') or result['reason'])
     print(f'Diagnostics: {run / "reports"}')
+    for path in sorted((run / 'outputs' / 'prepared').glob('*.meta.json')):
+        conversion = json.loads(path.read_text(encoding='utf-8')).get('converter')
+        if isinstance(conversion, dict) and conversion.get('text_only'):
+            print(f'Review PDF text conversion: {path.stem}; pypdf was used. Check table structure and reading order.')
     return pending
 
 
