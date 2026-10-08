@@ -86,7 +86,7 @@ This follow-up remains in this same plan/acceptance record.
 | P1 Merge configuration work | PR #6 merged into Voss main | `c32c731`, confirmed on GitHub |
 | P2 Custom venv installation | Create/reuse target venv; install/probe default Marker and core; honest fallback | Passed: fresh custom venv installed default profile, pip check and actual Marker API imports |
 | P3 PDF preparation | Source PDF to derived Markdown, converter provenance, no silent empty pages | 20 preparation/PDF tests passed, including real pypdf conversion |
-| P4 Delivery | Bilingual instructions, cross-platform offline tests, merge | Local 431 tests and Ruff passed; cross-platform/merge evidence follows the PDF-first PR |
+| P4 Delivery | Bilingual instructions, cross-platform offline tests, merge | Local 431 tests and Ruff passed; live cross-platform/merge evidence: [PR #7](https://github.com/Voss-zeji/LUMINA/pull/7) |
 
 Default PDF requirement is pinned to Marker 2.0.0 after inspecting its published
 wheel API. The dependency set resolves for Python 3.12 on this Windows host.
