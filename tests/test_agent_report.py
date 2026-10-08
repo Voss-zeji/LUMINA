@@ -133,6 +133,10 @@ class ReportTests(unittest.TestCase):
         self.assertTrue(all(c["verified"] for c in verification["candidates"]))
         thresholds = report["thresholds"]["thresholds"]
         self.assertEqual(set(thresholds), {"full", "MiniCross01"})
+        self.assertTrue(all(row['aggregation_mode'] == 'diagnostic' and row['accepted_records'] is None
+                            for row in thresholds['full']))
+        self.assertTrue(all(row['consensus_threshold'] == 2 and row['accepted_records'] > 0
+                            for row in thresholds['MiniCross01']))
         self.assertTrue(all(row["result_kind"] == "populated" for rows in thresholds.values()
                             for row in rows))
         self.assertNotIn("SECRET-DO-NOT-PERSIST", json.dumps(report))

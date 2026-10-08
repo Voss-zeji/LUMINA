@@ -25,7 +25,7 @@ The manuscript describes three stages:
 |---|---|---|
 | **Initial Query** | Multiple baseline models independently read a paper and answer defined research questions | Candidate values, source evidence, and model-reported confidence |
 | **Cross-examination** | Other selected models check the cited evidence against retrieved passages from the paper | Verification decisions and supporting quotations |
-| **Consensus Confirmation** | Filter by evidence support and aggregate the verified candidates using cross-model agreement | Structured research records and candidate details |
+| **Consensus Confirmation** | Require both evidence verification and baseline-model consensus; accept the unique most frequent verified value | Structured research records and candidate details |
 
 ```mermaid
 flowchart TD
@@ -35,7 +35,7 @@ flowchart TD
     Candidates --> Verify["Cross-examination by other models"]
     Context --> Verify
     Verify --> Votes["Verification decisions and source quotations"]
-    Votes --> Consensus["Consensus Confirmation: filter and aggregate"]
+    Votes --> Consensus["Consensus Confirmation: Tvfy AND Tbsl"]
     Candidates --> Consensus
     Consensus --> Data["Research dataset with candidate provenance"]
     Data --> Review["Researcher review and downstream analysis"]
@@ -45,7 +45,7 @@ Extraction uses the complete retained article body. Retrieval is used to locate 
 
 The repository's verifier checks evidence existence and topical relevance. The generating model is excluded from its own verification. For M selected extraction models, `cross_score` counts positive votes from the other models, with a maximum of **M − 1**. `min_cross_scores` sets the verification thresholds; `ensemble` normalizes and aggregates the corresponding candidates.
 
-The manuscript treats evidentiary support and baseline-model agreement as separate controls. The repository records verification scores, candidate frequencies, and model identities so these decisions remain inspectable.
+Consensus Confirmation accepts a record only when **both** conditions hold: its supporting candidates reach the verification threshold (`min_cross_scores`, T_vfy), and their shared normalized answer is the unique most frequent verified value, supported by at least `min_consensus_models` distinct generating models (T_bsl). Repeated rows from one model count once. Different target items, units, and explicit experiment markers are kept separate; tied modes are not accepted. `MiniCrossNN` contains accepted records and candidate gate decisions; `00_full` is an unfiltered diagnostic baseline, not an accepted dataset.
 
 ## 3. Research tasks and study examples
 
@@ -138,7 +138,7 @@ cp config.example.py config.py
 
 Chat uses an OpenAI-compatible `chat.completions` endpoint; embeddings use a direct HTTP POST. `supports_json_mode=True` requests a JSON object, followed by JSON5 parsing and local field validation. Keep credentials in local `config.py`, which is excluded from Git.
 
-For M extraction models, each configured verification threshold must be between 1 and M − 1. The two-model example uses `min_cross_scores: [1]`.
+For M extraction models, each verification threshold must be between 1 and M − 1; `min_consensus_models` must be an integer from 1 to M. If omitted, consensus uses a strict majority of the full selected model pool (`M // 2 + 1`), recorded in the frozen Agent specification. This is a configurable default, not a fixed numerical threshold prescribed by the manuscript. The two-model example uses `min_cross_scores: [1]` and `min_consensus_models: 2`. A changed threshold or scientific algorithm requires a new Agent run; existing output workbooks are not rewritten automatically.
 
 ## 6. Running a task
 

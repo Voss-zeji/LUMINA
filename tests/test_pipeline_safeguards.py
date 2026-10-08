@@ -46,6 +46,18 @@ class ChatCapabilityTests(unittest.TestCase):
 
 
 class PipelineValidationTests(unittest.TestCase):
+    def test_invalid_consensus_is_rejected_before_preparation_or_paid_extraction(self):
+        config = SimpleNamespace(DOMAINS={'aqua': {'questions': [1, 2, 3]}},
+                                 FULL_LLM_POOL={'a': {'model': 'model-a'}, 'b': {'model': 'model-b'}},
+                                 SELECTED_KEYS=['a', 'b'], LLM_SETTINGS={},
+                                 RUN={'round_index': 1, 'min_cross_scores': [1], 'min_consensus_models': 3})
+        with patch.object(preparation, 'ensure_markdowns') as prepare, \
+                patch.object(examiner, 'run_examiner_for_domain') as extract:
+            with self.assertRaisesRegex(ValueError, 'min_consensus_models'):
+                run_pipeline._run('aqua', 'all', config)
+        prepare.assert_not_called()
+        extract.assert_not_called()
+
     def test_rejects_cross_score_threshold_above_independent_verifier_count(self) -> None:
         with self.assertRaisesRegex(SystemExit, "at most 1"):
             run_pipeline.validate_min_cross_scores(["model-a", "model-b"], {"min_cross_scores": [2]})

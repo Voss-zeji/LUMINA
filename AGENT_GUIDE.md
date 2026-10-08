@@ -22,7 +22,7 @@ python -m pip install -r requirements.txt
 Copy-Item config.example.py config.py
 ```
 
-config.py 保存密钥和端点，已经在 .gitignore 里，不要提交到 GitHub；仓库里的 config.example.py 刻意留空。填完以后重点核对三处：每个 provider 的 `key` / `url` / `supports_json_mode`；`SELECTED_KEYS` 与 `EMBEDDING_MODEL`；`RUN` 里的 `temperature`、`chunk_size`、`overlap_percent`、`text_extension`、`min_cross_scores`。两个模型时 `min_cross_scores` 只能是 `[1]`；换成 M 个模型时，每个阈值必须落在 `1..M-1`，否则控制层在 cross/ensemble 之前就停下。
+config.py 保存密钥和端点，已经在 .gitignore 里，不要提交到 GitHub；仓库里的 config.example.py 刻意留空。填完以后重点核对三处：每个 provider 的 `key` / `url` / `supports_json_mode`；`SELECTED_KEYS` 与 `EMBEDDING_MODEL`；`RUN` 里的 `temperature`、`chunk_size`、`overlap_percent`、`text_extension`、`min_cross_scores` 和 `min_consensus_models`。选择 M 个模型时，核验门槛在 `1..M-1`，共识门槛在 `1..M`；共识设置省略时按完整模型池的严格多数冻结。双模型示例使用 `[1]` 和 `2`。正式接受结果必须同时通过两项门槛；`00_full` 仅供诊断。门槛或算法变化后新建 run，保留旧结果的执行条件。
 
 控制层不会替你挑科学模型。`SELECTED_KEYS` 和 `EMBEDDING_MODEL` 是研究者明确选定的科研模型；开发时用的 Codex 子 agent 模型池是另一套东西，两者不能混为一谈，控制层也不会默认再塞进第三个模型。
 

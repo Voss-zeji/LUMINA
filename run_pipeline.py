@@ -78,6 +78,7 @@ def _run(domain: str, stage: str, config, runtime=None) -> None:
         raise ValueError('round_index must be a positive integer')
     if stage in ("cross", "ensemble", "all"):
         validate_min_cross_scores(selected_model_names, config.RUN)
+        ensemble.consensus_threshold(selected_model_names, config.RUN)
 
     if stage in ("prepare", "all"):
         mds = preparation.ensure_markdowns(domain_cfg)
