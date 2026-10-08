@@ -57,7 +57,7 @@ class ConfigurationTests(unittest.TestCase):
     def test_relative_unicode_inputs_isolation_and_no_network_check(self):
         cfg = load_config(str(self.path))
         self.assertTrue(Path(cfg.REQUEST['papers'][0]).is_file())
-        self.assertEqual(Path(cfg.PROJECT['runs_dir']), self.root / 'runs')
+        self.assertEqual(Path(cfg.PROJECT['runs_dir']), (self.root / 'runs').resolve())
         first = cfg.DOMAINS['generic']['question_set']
         first['questions'][0]['prompt'] = 'changed in memory'
         self.assertNotEqual(first, load_config(str(self.path)).DOMAINS['generic']['question_set'])

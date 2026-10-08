@@ -62,8 +62,11 @@ only. Real paper API runs are excluded from this implementation.
 - Real child-process test uses only synthetic responses with outbound sockets
   blocked. It covers Chinese paths, TOML loading, trial pause, approval, completion,
   and an unchanged repeat without additional requests.
-- Independent review used Space Bunny/high after Kimi's quota rejection and Gemini
-  tool-formatting failures. No real-paper API workload has been launched.
+- Independent review checked configuration boundaries and the scientific call chain.
+  No real-paper API workload has been launched.
 - Final review confirmed the scientific dispatch and provenance wiring. Whole-task
   rejection for mixed invalid responses is intentional and tested; original Wildfire
   validation remains unchanged rather than introducing a new scientific requirement.
+- Initial GitHub run `37756701192`: Ubuntu passed all 399 tests; Windows passed 398
+  with one test-only mismatch between an 8.3 temporary path and its resolved long
+  name. The path assertion now normalizes both sides; no production change was needed.
