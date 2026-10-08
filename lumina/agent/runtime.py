@@ -38,7 +38,7 @@ class RunContext:
             request["smoke_papers"] = self.spec["smoke_paper_uids"]
             current = ResearchSpecification.from_config(request, config)
             if current.fingerprint != manifest["specification_hash"]:
-                raise ValueError("current config or scientific code differs from the frozen specification; create a new run")
+                raise ValueError("current config or scientific code differs from the frozen specification; use the original revision or create a new run")
             self.budget = Budget(self.store, self.spec)
         except BaseException:
             self.store.close()
@@ -165,8 +165,9 @@ class RunContext:
             raise ValueError("provider credentials missing; no request dispatched")
         return match
 
-    def _timeout(self):
-        return max(.01, min(120., self.spec["budget"]["max_runtime"] - self.budget.totals()["runtime"]))
+    def _timeout(self, model=None):
+        return max(.01, min((model or {}).get('timeout_seconds', 120.),
+                           self.spec["budget"]["max_runtime"] - self.budget.totals()["runtime"]))
 
     @staticmethod
     def _usage(response: dict, *, embedding=False):
@@ -230,6 +231,8 @@ class RunContext:
                                                   "attempt_id": attempt_id, "kind": kind})
         else:
             price = self.spec["pricing"][model["model"]]
+            if kind == 'embedding' and model.get('rate_limit_seconds'):
+                self.sleep(model['rate_limit_seconds'])
             estimated_input = len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) + 128
             if estimated_input > price["max_input_tokens"]:
                 self._gate("input_bound", key.task_id, "request text exceeds approved conservative input bound")
@@ -303,7 +306,7 @@ class RunContext:
             payload["response_format"] = {"type": "json_object"}
 
         def invoke():
-            client = OpenAI(api_key=provider["key"], base_url=provider["url"], max_retries=0, timeout=self._timeout())
+            client = OpenAI(api_key=provider["key"], base_url=provider["url"], max_retries=0, timeout=self._timeout(match))
             try:
                 return client.chat.completions.create(**payload).model_dump(mode="json")
             finally:
@@ -327,13 +330,12 @@ class RunContext:
         return content, sum(usage.values()) if usage is not None else None
 
     def _validate_extraction_messages(self, messages):
-        from .. import prompts
-
         key = self.current
         question = next((q for q in self.spec["questions"] if q["index"] == key.question), None)
         if question is None or not isinstance(messages, list) or len(messages) != 3:
             raise ValueError("extraction task needs its frozen question and three messages")
-        prompt = prompts.questions_for_domain(self.spec["domain"])[key.question - 1].strip("\n")
+        definition = self.spec['question_set']
+        prompt = definition['questions'][key.question - 1]['prompt'].strip("\n")
         if fingerprint(prompt) != question["prompt_hash"]:
             raise ValueError("question prompt differs from the frozen specification")
         prepared = self.run_dir / "outputs" / "prepared" / (key.paper_uid + ".md")
@@ -346,8 +348,9 @@ class RunContext:
             if paper["suffix"] != ".md":
                 raise ValueError("PDF must be prepared before extraction")
             path = self.run_dir / "inputs" / (key.paper_uid + ".md")
-        expected = [dict(role="system", content=prompts.message_system_v2.format(domain=self.spec["domain_knowledge"])),
-                    dict(role="user", content=prompts.message_system_v2_output.format(content=turnIntoPureText(path))),
+        templates = definition['templates']
+        expected = [dict(role="system", content=templates['system'].format(domain=self.spec["domain_knowledge"])),
+                    dict(role="user", content=templates['instruction'].format(content=turnIntoPureText(path))),
                     dict(role="user", content=prompt)]
         if messages != expected:
             raise ValueError("extraction messages do not match the frozen paper and question")
@@ -366,7 +369,7 @@ class RunContext:
             def invoke():
                 response = requests.post(match["endpoint"], json=payload,
                                          headers={"Authorization": "Bearer " + settings[model["source"]]["key"],
-                                                  "Content-Type": "application/json"}, timeout=self._timeout())
+                                                  "Content-Type": "application/json"}, timeout=self._timeout(match))
                 response.raise_for_status()
                 try:
                     parsed = response.json()

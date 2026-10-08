@@ -16,6 +16,7 @@ import pandas as pd
 
 from .. import ensemble_utils_meta as eum
 from .. import ensemble_utils_value as euv
+from .. import prompts
 from ..common import (filename_token, fingerprint, invalid_path, load_json, paper_markdowns,
                       paper_prefix_from_path, read_composite, save_json, turnIntoPureText)
 from ..cross_validation import (_INVALID_EVIDENCE, _chunks_for_paper, _embedding_spec,
@@ -95,7 +96,8 @@ def _signatures(spec) -> dict:
     """Current verifier signature per selected model display name."""
     embedding = dict(spec["embedding"], url=spec["embedding"].get("url") or spec["embedding"]["endpoint"])
     llm_dicts = {m["model"]: dict(model=m["model"], source=m["source"]) for m in spec["models"]}
-    return verifier_signatures(llm_dicts, _providers(spec), embedding, spec["run"])
+    return verifier_signatures(llm_dicts, _providers(spec), embedding, spec["run"],
+                               {'question_set': spec['question_set']} if 'question_set' in spec else None)
 
 
 def _paper_index(runtime) -> dict:
@@ -167,7 +169,8 @@ def _extraction(runtime, scope, index_by_uid, prepared_fingerprints, diagnostics
                                            detail="artifact bytes no longer match the ledger receipt"))
                         continue
                     # Then the core's own validator decides whether the paid bytes are usable.
-                    if not _successful_output(str(path), meta, spec["domain"]):
+                    if not _successful_output(str(path), meta, spec["domain"],
+                                              {'question_set': spec['question_set']} if 'question_set' in spec else None):
                         classes["parse_failure"] += 1
                         failed.append(dict(where, file=_rel(runtime, path),
                                            raw=_rel(runtime, invalid_path(path))
@@ -513,8 +516,9 @@ def _embeddings(runtime, scope, index_by_uid, composites, diagnostics) -> dict:
 
 # --------------------------------------------------- disagreement, warnings
 
-def _numeric(question, domain) -> bool:
-    return question != 1 and not (domain == "aqua" and question == 2)
+def _numeric(question, spec) -> bool:
+    cfg = {'question_set': spec['question_set']} if 'question_set' in spec else None
+    return prompts.question_rule(spec['domain'], question, cfg)['kind'] == 'numeric'
 
 
 def _normalize(value, unit, item, numeric) -> str:
@@ -533,7 +537,7 @@ def _disagreement(runtime, composites) -> dict:
     for (round_index, question), frame in sorted(composites.items()):
         if frame.empty:
             continue
-        numeric = _numeric(question, runtime.spec["domain"])
+        numeric = _numeric(question, runtime.spec)
         for (paper_uid, item), group in frame.groupby(["paper_uid", "item"], dropna=False):
             answers = {str(row["model"]): dict(value=row.get("value"), unit=row.get("unit"),
                                                normalized=_normalize(row.get("value"), row.get("unit"),
@@ -553,7 +557,7 @@ def _warnings(runtime, composites) -> dict:
     """Malformed values, unsupported units and outliers, as warnings only."""
     items = []
     for (round_index, question), frame in sorted(composites.items()):
-        if frame.empty or not _numeric(question, runtime.spec["domain"]):
+        if frame.empty or not _numeric(question, runtime.spec):
             continue
         for (paper_uid, item), group in frame.groupby(["paper_uid", "item"], dropna=False):
             scalars = {}

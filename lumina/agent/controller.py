@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 from importlib.metadata import version
 from pathlib import Path
 from types import SimpleNamespace
@@ -48,6 +49,8 @@ def _plan_tasks(store, spec, run_id):
 
 
 def _prepare(runtime):
+    if hasattr(runtime.config, 'PROJECT'):
+        print('Preparing documents', file=sys.stderr, flush=True)
     root = runtime.run_dir
     for paper in runtime.spec["papers"]:
         key = runtime.key("prepare", paper_uid=paper["paper_uid"])
@@ -96,6 +99,7 @@ def _scope_config(runtime, paper_uids, round_index):
         shutil.copyfile(source, markdown_dir / source.name)
     cfg = dict(markdown_dir=str(markdown_dir), pdf_dir=str(root / "checkpoints" / "no_pdf_conversion"),
                domain_knowledge=spec["domain_knowledge"], composite_prefix="LUMINA",
+               question_set=spec['question_set'],
                questions=[q["index"] for q in spec["questions"]])
     for field, folder in dict(examiner_output="examiner", composite_dir="composite", embedding_dir="embeddings",
                               crosser_dir="cross", ensemble_dir="ensemble").items():
@@ -116,6 +120,10 @@ def _execute_scope(runtime, paper_uids):
         config, scope_hash = _scope_config(runtime, paper_uids, round_index)
         cfg = config.DOMAINS[runtime.spec["domain"]]
         for stage, field in fields.items():
+            if hasattr(runtime.config, 'PROJECT'):
+                labels = dict(examiner='Extracting answers', composite='Combining candidates',
+                              embeddings='Indexing evidence', cross='Cross-checking evidence', ensemble='Confirming consensus')
+                print(f'Round {round_index}: {labels[stage]} ({len(paper_uids)} papers)', file=sys.stderr, flush=True)
             key = runtime.key(stage, round_index=round_index, chunk=scope_hash)
             with runtime.task_scope(key):
                 # Core semantic checks still run; paid task/response caches prevent extra calls.
@@ -136,6 +144,10 @@ def _execute_scope(runtime, paper_uids):
                 save_json(receipt, dict(task_id=key.task_id, stage=stage, scope=sorted(paper_uids), round_index=round_index,
                                         artifacts=[str(p.relative_to(checkpoint)) for p in artifacts]))
                 runtime.completed(key, artifacts + [receipt])
+            stop_after = getattr(runtime.config, 'PROJECT', {}).get('stage', 'all')
+            if stage == stop_after and stage != 'ensemble':
+                runtime.store.set_state('PAUSED', f'Configured stop after {stage}; change project.stage to continue')
+                raise ControlStop(f'Finished requested stage: {stage}')
 
 
 def _final_qc(runtime):
@@ -271,6 +283,9 @@ def _execute_once(run_dir, config, *, allow_recovery) -> dict:
                 state = store.set_state("INPUT_READY", "preflight recovered from frozen inputs")["state"]
             if state == "INPUT_READY":
                 _prepare(runtime)
+                if getattr(config, 'PROJECT', {}).get('stage', 'all') == 'prepare':
+                    store.set_state('PAUSED', 'Configured stop after prepare; change project.stage to continue')
+                    return dict(state='PAUSED', run_id=run.name, reason='Finished requested stage: prepare')
                 state = store.set_state("SMOKE", "inputs prepared; executing smoke")['state']
             if state == "SMOKE":
                 smoke = runtime.spec["smoke_paper_uids"]

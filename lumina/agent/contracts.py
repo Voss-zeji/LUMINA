@@ -13,11 +13,11 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .. import ensemble, prompts
-from ..common import atomic_output, canonical_paper_id, fingerprint, save_json
+from ..common import atomic_output, canonical_paper_id, filename_token, fingerprint, save_json
 
 FORMAT_VERSION = 1
 SCIENTIFIC_FILES = (
-    "prompts.py", "common.py", "llm.py", "utils.py", "preparation.py", "examiner.py", "composite.py",
+    "configuration.py", "pipeline.py", "prompts.py", "common.py", "llm.py", "utils.py", "preparation.py", "examiner.py", "composite.py",
     "cross_validation.py", "ensemble.py", "ensemble_utils_meta.py", "ensemble_utils_value.py",
 )
 RUN_FIELDS = {"round_index", "temperature", "chunk_size", "overlap_percent", "text_extension", "min_cross_scores"}
@@ -57,6 +57,9 @@ def _model(model: dict, settings: dict, *, embedding=False) -> dict:
     provider = settings[source]
     result = dict(model=name, source=source,
                   endpoint=endpoint((model.get("url") if embedding else None) or provider.get("url")))
+    for field in ('timeout_seconds', 'rate_limit_seconds'):
+        if field in model:
+            result[field] = _number(model[field], field, strict=field == 'timeout_seconds')
     if not embedding:
         json_mode = provider.get("supports_json_mode", True)
         if type(json_mode) is not bool:
@@ -123,12 +126,15 @@ class ResearchSpecification:
         if not isinstance(request, dict) or set(request) - SPEC_FIELDS:
             raise ValueError("unknown specification fields; credentials belong in the local config")
         domain = request.get("domain")
-        if domain not in {"aqua", "wildfire"} or domain not in config.DOMAINS:
-            raise ValueError("domain must be aqua or wildfire and configured")
-        questions = prompts.questions_for_domain(domain)
+        if not isinstance(domain, str) or domain not in config.DOMAINS:
+            raise ValueError("domain must identify a configured study")
+        if filename_token(domain) != domain:
+            raise ValueError('domain must be a portable filename component, not a path')
         domain_cfg = config.DOMAINS[domain]
+        definition = prompts.definition(domain, domain_cfg)
+        questions = prompts.questions_for_domain(domain, domain_cfg)
         if domain_cfg.get("questions") != list(range(1, len(questions) + 1)):
-            raise ValueError("questions must match the scientific core; custom question selection is unsupported")
+            raise ValueError("questions must match the configured question list")
         if not isinstance(domain_cfg.get("domain_knowledge"), str) or not domain_cfg["domain_knowledge"].strip():
             raise ValueError("domain_knowledge must be explicit")
         raw_papers = request.get("papers")
@@ -218,10 +224,12 @@ class ResearchSpecification:
                     run=run, rounds=rounds, budget=budget, pricing=pricing, smoke_size=smoke_size,
                     smoke_paper_uids=sorted(smoke_uids),
                     advisor=advisor, allow_pdf_resources=allow_pdf,
-                    questions=[dict(index=i, prompt_hash=fingerprint(q.strip("\n"))) for i, q in enumerate(questions, 1)],
+                    question_set=definition,
+                    questions=[dict(index=i, id=definition['questions'][i - 1]['id'],
+                                    prompt_hash=fingerprint(q.strip("\n"))) for i, q in enumerate(questions, 1)],
                     scientific_code={name: file_hash(core / name) for name in SCIENTIFIC_FILES},
                     control_code={str(path.relative_to(core.parent)).replace("\\", "/"): file_hash(path)
-                                  for path in [core.parent / "run_pipeline.py", *sorted((core / "agent").glob("*.py"))]},
+                                  for path in [core.parent / "run_pipeline.py", core / "study.py", *sorted((core / "agent").glob("*.py"))]},
                     policies=dict(cross="evidence existence and relevance", numeric="verified unique mode with distinct model consensus",
                                   consensus="Tvfy AND Tbsl; 00_full is diagnostic; ties are unaccepted",
                                   units="no automatic unit conversion", verification="all independent selected models"))

@@ -9,7 +9,7 @@
 
 LUMINA is a multi-model framework for quantitative scientific synthesis. It combines structured literature extraction, cross-examination of supporting evidence, and consensus confirmation to reduce ungrounded model outputs and produce traceable research datasets.
 
-This repository provides the Aqua and Wildfire scientific pipelines together with the Voss Agent execution mode.
+This repository provides a configurable extraction, cross-examination, and consensus pipeline. Aqua and Wildfire are included studies; new text or numeric research topics can be defined in configuration.
 
 ## 1. Scientific purpose
 
@@ -63,7 +63,7 @@ These study settings describe the manuscript's experiments. In this repository, 
 | **Wildfire — biomass burning** | Q1 | Study location and study period |
 | | Q2–Q4 | CO2, CH4, and N2O emission factors, fuel/combustion conditions, MCE, and experimental/reference-source markers |
 
-Question definitions and output instructions are in [`lumina/prompts.py`](lumina/prompts.py).
+Question definitions and output instructions are in the [Aqua](configs/aqua/questions.toml) and [Wildfire](configs/wildfire/questions.toml) configurations.
 
 ## 4. Program workflow
 
@@ -80,33 +80,21 @@ The scientific framework is implemented through six processing stages:
 
 Saved Markdown is preserved; downstream reads use the text before References, Acknowledgments, or Appendix headings. Default retrieval uses 2,048-character chunks, 20% overlap, and one neighboring chunk on each side of the best match.
 
-### Traditional mode and Agent mode
-
-Both modes call the same scientific pipeline.
-
-| | Traditional mode | Voss Agent mode |
-|---|---|---|
-| Entry | `--domain` / `--stage` | `run`, `resume`, and control commands |
-| Inputs | Domain directories in `config.py` | Explicit paper list and isolated input snapshots |
-| Progress | Stage files and task fingerprints | Persistent SQLite state, tasks, and request receipts |
-| Execution | Selected stage or the full pipeline | Trial run, human approval, batch processing, final integrity checks |
-| Cost records | Request information in outputs | Frozen call/token/cost/runtime budgets and a request ledger |
-| Outputs | Configured domain directories | `runs/<run_id>/outputs/R<round>/` and JSON reports |
+### Study workflow
 
 ```mermaid
 flowchart LR
-    Plan["Freeze inputs, models, and budgets"] --> Trial["Run selected trial papers"]
-    Trial --> Approval["Review sources, outputs, and costs"]
-    Approval -->|"Approve, then resume"| Batch["Process the full paper list"]
-    Batch --> QC["Check task and artifact integrity"]
-    QC --> Done["Save completion records"]
+    Config["Edit study configuration"] --> Trial["Run a small trial"]
+    Trial --> Review["Review evidence, outputs and costs"]
+    Review -->|"Explicit confirmation"| Batch["Continue the batch"]
+    Batch --> Output["Results, candidate details and reports"]
 ```
 
-Agent mode reuses completed trial requests during batch execution. Each round has separate outputs. At the trial approval point, researchers inspect the source evidence, units, treatment assignments, and costs before continuing. Engineering completion is recorded separately from independent scientific evaluation.
+Input snapshots, request receipts, budgets, and recovery remain part of the runtime. The batch reuses completed trial requests. Machine completion remains separate from independent scientific evaluation.
 
 ## 5. Installation and configuration
 
-Use Python 3.12 and an isolated environment:
+Use Python 3.12:
 
 ```bash
 git clone https://github.com/Voss-zeji/LUMINA.git
@@ -114,83 +102,56 @@ cd LUMINA
 python -m pip install -r requirements.txt
 ```
 
-For PDF input, install a compatible `marker-pdf` release exposing `PdfConverter`, `create_model_dict`, and `text_from_rendered`. Markdown can be supplied directly.
+PDF input additionally requires a compatible `marker-pdf` installation and explicit resource-preparation permission. Markdown input does not.
 
-Copy the configuration template:
+Copy `configs/aqua`, `configs/wildfire`, or `configs/generic` into your study directory:
+
+```bash
+cp -R configs/aqua configs/my-study
+cp configs/my-study/secrets.example.toml configs/my-study/secrets.local.toml
+```
+
+PowerShell:
 
 ```powershell
-# PowerShell
-Copy-Item config.example.py config.py
+Copy-Item configs/aqua configs/my-study -Recurse
+Copy-Item configs/my-study/secrets.example.toml configs/my-study/secrets.local.toml
 ```
 
-```bash
-# Bash
-cp config.example.py config.py
-```
-
-| Configuration | Values to set |
+| File | User-editable inputs |
 |---|---|
-| `FULL_LLM_POOL` / `SELECTED_KEYS` | Model IDs, provider sources, and extraction-model selection |
-| `LLM_SETTINGS` | API keys, chat base URLs, and `supports_json_mode` |
-| `EMBEDDING_MODEL` | Embedding model/source and complete embedding request URL |
-| `RUN` | Round, temperature, chunk size/overlap, context extension, and verification thresholds |
-| `DOMAINS` | Domain description, question indices, and traditional-mode directories |
+| `project.toml` | Models/endpoints, study identity, rounds, retrieval settings, trial size, output location, prices and four budgets |
+| `papers.txt` | One PDF or Markdown path per line |
+| `questions.toml` | All prompts, question definitions, text/numeric types, item and unit rules |
+| `secrets.local.toml` | API keys; excluded from Git |
 
-Chat uses an OpenAI-compatible `chat.completions` endpoint; embeddings use a direct HTTP POST. `supports_json_mode=True` requests a JSON object, followed by JSON5 parsing and local field validation. Keep credentials in local `config.py`, which is excluded from Git.
+Relative paths resolve from the configuration directory. Replace placeholders with your actual settings, including documented model prices. TOML is read with Python's standard-library `tomllib`.
 
-For M extraction models, each verification threshold must be between 1 and M − 1; `min_consensus_models` must be an integer from 1 to M. If omitted, consensus uses a strict majority of the full selected model pool (`M // 2 + 1`), recorded in the frozen Agent specification. This is a configurable default, not a fixed numerical threshold prescribed by the manuscript. The two-model example uses `min_cross_scores: [1]` and `min_consensus_models: 2`. A changed threshold or scientific algorithm requires a new Agent run; existing output workbooks are not rewritten automatically.
+A new topic changes question `id`, `prompt`, `kind`, `items`, `allowed_values`, `require_unit`, and `require_experimental` in configuration. Responses retain the scalar `item/value/evidence/confidence_lv` contract, with `unit/experimental` as needed. New algorithms or nested response structures require Python development.
 
-## 6. Running a task
+## 6. Running a study
 
-### Traditional pipeline
-
-Place documents in the configured domain directories and run:
+Validate without model requests or creating a run directory:
 
 ```bash
-python run_pipeline.py --config config.py --domain aqua --stage all
-python run_pipeline.py --config config.py --domain wildfire --stage all
+python run_pipeline.py --config configs/my-study/project.toml --check
 ```
 
-Individual stages can be selected after their prerequisite outputs are available:
+Run or resume:
 
 ```bash
-python run_pipeline.py --config config.py --domain wildfire --stage ensemble
+python run_pipeline.py --config configs/my-study/project.toml
 ```
 
-### Agent execution
+The first invocation processes a small trial. Review `smoke_report.json`, output tables, and source evidence, including units and experiment identities. Enter `y` at the terminal to continue the batch. Noninteractive execution pauses at this point; rerun the same command in an interactive terminal to confirm. Internal gate IDs are not part of this workflow.
 
-Copy [`research.example.json`](research.example.json) to `research.json`. Supply paper paths, rounds, trial-paper selection, model prices and their sources, token bounds, and the four budgets: `max_calls`, `max_tokens`, `max_cost`, `max_runtime`. Replace the template's `null` and `REPLACE` entries. For PDF resource preparation, set `allow_pdf_resources: true`.
+`project.stage = "all"` is the default. Set `prepare`, `examiner`, `composite`, `embeddings`, or `cross` to run prerequisite stages and pause after that stage; change back to `all` to continue. `ensemble` completes the scientific stages for the current trial or batch scope without bypassing trial approval.
 
-Create the run and inspect its plan without sending model requests:
+The same `project.run_id` identifies one run. Changed papers, models, prompts, question rules, scientific settings, or budgets require a new run ID; incompatible cached results are rejected. The stage stop position can change. Exit codes are 0 for success, 2 for pause/required confirmation, and 1 for errors.
 
-```bash
-python run_pipeline.py run --spec research.json --config config.py --runs-dir runs --run-id study-001 --dry-run
-python run_pipeline.py status --runs-dir runs --run-id study-001
-```
+`max_runtime` includes elapsed waiting and review time from run creation. Requests with unknown outcomes retain their reservations and require reconciliation rather than blind retries. Diagnostics live in `reports/`.
 
-Continue the same run to execute the trial:
-
-```bash
-python run_pipeline.py resume --runs-dir runs --run-id study-001 --config config.py
-```
-
-Review `reports/smoke_report.json` and source papers. Read the pending gate ID from `status`, then replace `GATE_ID`:
-
-```bash
-python run_pipeline.py approve --runs-dir runs --run-id study-001 --gate-id GATE_ID --reason "Reviewed trial evidence, outputs, and costs"
-python run_pipeline.py resume --runs-dir runs --run-id study-001 --config config.py
-python run_pipeline.py report --runs-dir runs --run-id study-001
-```
-
-`approve` records the decision; `resume` continues processing. Exit code 2 denotes a pause or required human attention. `max_runtime` measures elapsed time from run creation, including waiting and review. Requests are recorded before parsing, and uncertain execution is retained for reconciliation. See the [Agent guide](AGENT_GUIDE.md) for pause, recovery, and request controls.
-
-For comparison with an independently prepared reference:
-
-```bash
-python run_pipeline.py evaluate --runs-dir runs --run-id study-001 --gold independent-gold.json --output-dir evaluation-study-001
-```
-
-The evaluator writes outside the production run directory. [`gold.example.json`](gold.example.json) illustrates the reference format.
+The legacy Python configuration and commands remain supported. See [configuration and migration](CONFIGURATION.md). Historical runs are not rewritten; incompatible runs require their original revision or a new run. [Advanced operations](AGENT_GUIDE.md) cover diagnostics, independent reference evaluation, and request reconciliation.
 
 ## 7. Results and data organization
 
@@ -200,7 +161,7 @@ Each answer contains `value`, `evidence`, `confidence_lv`, and its domain fields
 - **Candidate tables:** all model answers with evidence and provenance, organized by question.
 - **Verification records:** each verifying model's decision and quotation.
 - **Result tables:** `Ensemble_Result` and `Ensemble_All-Standard-Answers` for `00_full` and configured `MiniCrossNN` variants.
-- **Agent records:** input snapshots, frozen settings, request receipts, budgets, and execution reports.
+- **Run records:** input snapshots, frozen settings, request receipts, budgets, and execution reports.
 
 Aggregation standardizes metadata, numbers, and unit strings within a paper. Inspect both the result and candidate-detail tables when selecting data for further analysis.
 
@@ -223,11 +184,10 @@ runs/<run_id>/
 
 ## 8. Project resources
 
-- [Extraction prompts and domain questions](lumina/prompts.py)
-- [Example model and directory configuration](config.example.py)
-- [Example Agent research specification](research.example.json)
-- [Agent operation guide](AGENT_GUIDE.md) (Chinese)
-- [Scientific pipeline and Agent workflow](LUMINA_AGENTIC_WORKFLOW.md) (Chinese)
+- [Aqua study](configs/aqua/project.toml) · [Wildfire study](configs/wildfire/project.toml) · [New-topic template](configs/generic/project.toml)
+- [Configuration and migration](CONFIGURATION.md)
+- [Advanced operations and diagnostics](AGENT_GUIDE.md)
+- [Independent-reference format](gold.example.json)
 
 This Voss fork builds on [billy31/LUMINA](https://github.com/billy31/LUMINA) and retains the [Apache License 2.0](LICENSE).
 

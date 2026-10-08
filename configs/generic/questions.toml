@@ -1,0 +1,127 @@
+# Research prompts and local answer rules. Change these files, not Python.
+# 研究提示词与字段规则；本地校验不会被提示词覆盖。
+
+[templates]
+system = """
+
+You are skilled in Chinese/English paper reading; You are also a scientist and expert in {domain}.\u0020
+You read through the whole paper (from the beginning to the end);
+provide the best answers (may include multiple items) you can find to the question that I ask.
+"""
+
+instruction = """
+
+Read the question, analyze step by step, provide your answer and your confidence (0% to 100%) to this answer.\u0020
+Also provide the direct quote (evidence) when required.
+Note:\u0020
+1. The direct quote indicates the specific textual evidence from the article that supports your conclusions.
+2. Provide direct quotes of all evidences. If the evidence is in a table or figure, directly reference the table name or figure name.\u0020
+3. The confidence indicates how likely you think your answer is true. Note that the confidence level should be high if you insist that there are no required values.
+
+Please read this markdown content:
+{content}
+"""
+
+verifier_system = """
+
+You are a scientific evidence verifier rather than a strict semantic fact-checker.\u0020
+You are going to check:
+Return a JSON object with existing_flag (1 if the evidence exists and is related, otherwise 0) and direct_quote (a verbatim supporting quote, or null). Follow the evidence-existence rules in the user instructions.
+"""
+
+verifier_instruction = """
+
+Rethink before you do the checker and then proceed with the following:
+
+Your task is to verify whether the "answer" in the Candidate Response
+is supported as an existing piece of evidence in the Original Context,
+even if the support is indirect, structural, or coarse-grained.
+
+### Original Context (Source):
+{context}
+
+### Candidate Response (Target):
+Our answer to the {key_topic} is {answer}.
+
+### Instructions:
+1. Ignore conversational fillers (e.g., "Our answer to... is...").
+2. Focus on whether the stated "answer" (e.g., a table, figure, section, or dataset)
+   **exists in the Original Context and is topically related to the {key_topic}**.
+3. Do NOT require the answer to contain explicit quantitative results
+   for the {key_topic} unless explicitly stated.
+4. If the answer exists in the Original Context (e.g., as a table caption, section title,
+   or referenced evidence), set:
+   - "existing_flag" = 1
+   - "direct_quote" = the exact text\u0020
+5. Only set "existing_flag" = 0 if the answer does NOT appear anywhere
+   in the Original Context as a named or referenced evidence item.
+
+### Constraints:
+- The "direct_quote" must be copied 100% verbatim from the Original Context.
+- Table captions, figure captions, section headers, and in-text references
+  are all valid sources of evidence.
+\u0020\u0020
+Example:
+{{
+    "existing_flag": 0,
+    "direct_quote": null
+}}
+"""
+
+verifier_full = """
+
+Rethink before you do the checker and then proceed with the following:
+
+Your task is to verify whether the "answer" in the Candidate Response
+is supported as an existing piece of evidence in the Original Context,
+even if the support is indirect, structural, or coarse-grained.
+
+### Original Context (Source):
+{context}
+
+### Candidate Response (Target):
+Our answer is {answer}.
+
+### Instructions:
+1. Ignore conversational fillers (e.g., "Our answer to... is...").
+2. Focus on whether the stated "answer" (e.g., a table, figure, section, or dataset)
+   **exists in the Original Context**.
+3. Do NOT require the answer to contain explicit quantitative results unless explicitly stated.
+4. If the answer exists in the Original Context (e.g., as a table caption, section title,
+   or referenced evidence), set:
+   - "existing_flag" = 1
+   - "direct_quote" = the exact text\u0020
+5. Only set "existing_flag" = 0 if the answer does NOT appear anywhere
+   in the Original Context as a named or referenced evidence item.
+
+### Constraints:
+- The "direct_quote" must be copied 100% verbatim from the Original Context.
+- Table captions, figure captions, section headers, and in-text references
+  are all valid sources of evidence.
+\u0020\u0020
+Example:
+{{
+    "existing_flag": 0,
+    "direct_quote": null
+}}
+"""
+
+[[questions]]
+id = "habitat"
+prompt = """
+Return the habitat as {"Habitat": {"value": "forest", "evidence": "verbatim quote", "confidence_lv": 95}}. Use a null value when unreported."""
+kind = "text"
+items = ["Habitat"]
+allowed_values = []
+require_unit = false
+require_experimental = false
+
+[[questions]]
+id = "biomass"
+prompt = """
+Extract biomass measurements as named item objects with scalar value, unit, evidence, confidence_lv and experimental (experiment identifier). Use a null value when unreported."""
+kind = "numeric"
+items = []
+allowed_values = []
+require_unit = true
+require_experimental = true

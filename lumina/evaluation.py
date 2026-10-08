@@ -717,16 +717,9 @@ def _composite_rows(run: Path) -> List[Dict[str, Any]]:
     return rows
 
 
-def _numeric_domain_question(domain: str, question: int) -> bool:
-    """Whether the core ensembles this domain question numerically.
-
-    Mirrors ``ensemble._ensemble_subset`` exactly: aqua Q1/Q2 and wildfire Q1 go
-    through the text (meta) ensemble, everything else through the numeric one.
-    Parsing a text row as a number would score an unparsable failure instead of
-    the metadata value the ensemble actually published.
-    """
-    d = (domain or "").lower()
-    return question != 1 and not (d == "aqua" and question == 2)
+def _numeric_domain_question(domain: str, question: int, domain_cfg=None) -> bool:
+    """Use the same frozen question rule as the production pipeline."""
+    return prompts.question_rule(domain, question, domain_cfg)['kind'] == 'numeric'
 
 
 def _variant_threshold(variant: str) -> Optional[float]:
@@ -862,7 +855,7 @@ def _identity(witnesses: List[Dict[str, Any]]) -> Tuple[str, List[str]]:
 
 
 def _result_rows(path: Path, round_index: int, variant: str, domain: str,
-                 composite_rows: List[Dict[str, Any]]):
+                 composite_rows: List[Dict[str, Any]], domain_cfg=None):
     """Build evaluation records from one ensemble Result workbook.
 
     Whether a row is numeric or text follows the domain and question, exactly as
@@ -876,7 +869,7 @@ def _result_rows(path: Path, round_index: int, variant: str, domain: str,
     """
     frame = pd.read_excel(path, keep_default_na=False, dtype={"paper_index": str})
     numeric = _numeric_domain_question(domain, int(
-        _RESULT_RE.search(path.name).group("question")))
+        _RESULT_RE.search(path.name).group("question")), domain_cfg)
     threshold = _variant_threshold(variant)
     round_rows = [r for r in composite_rows if r["_round"] == round_index]
     # The core takes its mode decision once per paper x question, so the verdict and
@@ -963,18 +956,7 @@ def _load_gold(path: str) -> Dict[str, Any]:
 
 
 def _manifest_domain(manifest: Dict[str, Any]) -> str:
-    """The run's scientific domain, refused rather than guessed.
-
-    The core routes each question to the text or the numeric ensemble purely by domain
-    and question index, so an unknown domain does not merely lose information: it sends
-    aqua Q2 down the numeric branch and turns real ``Study_species`` text into an
-    unparsable value. Defaulting a missing domain to ``""`` produced exactly that.
-
-    Only the run manifest is an authority here. Inferred from file names it would be a
-    guess about a partial run, so evaluation refuses instead. The core's own
-    ``prompts.questions_for_domain`` validates the name, so the accepted set is never
-    duplicated or widened here. This runs before anything is read or written.
-    """
+    """Require an explicit domain and use frozen question definitions when present."""
     specification = manifest.get("specification")
     domain = _text(specification.get("domain")) if isinstance(specification, dict) else ""
     if not domain:
@@ -982,13 +964,13 @@ def _manifest_domain(manifest: Dict[str, Any]) -> str:
                          "whether a question publishes text or numeric values, so it is "
                          "refused rather than guessed from output file names")
     try:
-        prompts.questions_for_domain(domain)
+        prompts.questions_for_domain(domain, {"question_set": specification["question_set"]} if "question_set" in specification else None)
     except ValueError as exc:
         raise ValueError(f"unsupported run domain {domain!r}: {exc}") from exc
     return domain
 
 
-def _discover(run: Path, domain: str) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], str]:
+def _discover(run: Path, domain: str, domain_cfg=None) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], str]:
     """Read production outputs read-only and report whether the run looks complete."""
     composite_rows = _composite_rows(run)
     records: List[Dict[str, Any]] = []
@@ -998,7 +980,7 @@ def _discover(run: Path, domain: str) -> Tuple[List[Dict[str, Any]], List[Dict[s
             continue
         variant = result_path.parent.name
         round_index = _round_of(result_path)
-        records.extend(_result_rows(result_path, round_index, variant, domain, composite_rows))
+        records.extend(_result_rows(result_path, round_index, variant, domain, composite_rows, domain_cfg))
     composites = list((run / "outputs").rglob("composite/LUMINA_Q*.xlsx"))
     status = "PRODUCTION_READ" if records and composites else "INCOMPLETE_PRODUCTION"
     return records, composites, status
@@ -1030,7 +1012,8 @@ def evaluate_run(run_dir, gold: Optional[str] = None, output_dir: Optional[str] 
     domain = _manifest_domain(manifest)
 
     before = _production_files(run)
-    records, composites, production_status = _discover(run, domain)
+    definition = manifest["specification"].get("question_set")
+    records, composites, production_status = _discover(run, domain, {"question_set": definition} if definition else None)
     state = _read_json(run / "state.json") if (run / "state.json").is_file() else {}
 
     result: Dict[str, Any] = {

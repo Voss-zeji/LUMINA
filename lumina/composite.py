@@ -56,7 +56,7 @@ def create_baseline_composite(domain_cfg: dict, questions: list[int], models: li
                         part = _parse_invalid_txt(str(invalid_path(output)))
                         for key, value in meta.items():
                             part[key] = value
-                validate_answers(part, domain, question_index)
+                validate_answers(part, domain, question_index, domain_cfg)
                 part["paper_index"] = part["paper_index"].map(canonical_paper_id)
                 part["question_index"] = question_index
                 part["round_index"] = round_index

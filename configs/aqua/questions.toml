@@ -1,0 +1,213 @@
+# Research prompts and local answer rules. Change these files, not Python.
+# 研究提示词与字段规则；本地校验不会被提示词覆盖。
+
+[templates]
+system = """
+
+You are skilled in Chinese/English paper reading; You are also a scientist and expert in {domain}.\u0020
+You read through the whole paper (from the beginning to the end);
+provide the best answers (may include multiple items) you can find to the question that I ask.
+"""
+
+instruction = """
+
+Read the question, analyze step by step, provide your answer and your confidence (0% to 100%) to this answer.\u0020
+Also provide the direct quote (evidence) when required.
+Note:\u0020
+1. The direct quote indicates the specific textual evidence from the article that supports your conclusions.
+2. Provide direct quotes of all evidences. If the evidence is in a table or figure, directly reference the table name or figure name.\u0020
+3. The confidence indicates how likely you think your answer is true. Note that the confidence level should be high if you insist that there are no required values.
+
+Please read this markdown content:
+{content}
+"""
+
+verifier_system = """
+
+You are a scientific evidence verifier rather than a strict semantic fact-checker.\u0020
+You are going to check:
+Return a JSON object with existing_flag (1 if the evidence exists and is related, otherwise 0) and direct_quote (a verbatim supporting quote, or null). Follow the evidence-existence rules in the user instructions.
+"""
+
+verifier_instruction = """
+
+Rethink before you do the checker and then proceed with the following:
+
+Your task is to verify whether the "answer" in the Candidate Response
+is supported as an existing piece of evidence in the Original Context,
+even if the support is indirect, structural, or coarse-grained.
+
+### Original Context (Source):
+{context}
+
+### Candidate Response (Target):
+Our answer to the {key_topic} is {answer}.
+
+### Instructions:
+1. Ignore conversational fillers (e.g., "Our answer to... is...").
+2. Focus on whether the stated "answer" (e.g., a table, figure, section, or dataset)
+   **exists in the Original Context and is topically related to the {key_topic}**.
+3. Do NOT require the answer to contain explicit quantitative results
+   for the {key_topic} unless explicitly stated.
+4. If the answer exists in the Original Context (e.g., as a table caption, section title,
+   or referenced evidence), set:
+   - "existing_flag" = 1
+   - "direct_quote" = the exact text\u0020
+5. Only set "existing_flag" = 0 if the answer does NOT appear anywhere
+   in the Original Context as a named or referenced evidence item.
+
+### Constraints:
+- The "direct_quote" must be copied 100% verbatim from the Original Context.
+- Table captions, figure captions, section headers, and in-text references
+  are all valid sources of evidence.
+\u0020\u0020
+Example:
+{{
+    "existing_flag": 0,
+    "direct_quote": null
+}}
+"""
+
+verifier_full = """
+
+Rethink before you do the checker and then proceed with the following:
+
+Your task is to verify whether the "answer" in the Candidate Response
+is supported as an existing piece of evidence in the Original Context,
+even if the support is indirect, structural, or coarse-grained.
+
+### Original Context (Source):
+{context}
+
+### Candidate Response (Target):
+Our answer is {answer}.
+
+### Instructions:
+1. Ignore conversational fillers (e.g., "Our answer to... is...").
+2. Focus on whether the stated "answer" (e.g., a table, figure, section, or dataset)
+   **exists in the Original Context**.
+3. Do NOT require the answer to contain explicit quantitative results unless explicitly stated.
+4. If the answer exists in the Original Context (e.g., as a table caption, section title,
+   or referenced evidence), set:
+   - "existing_flag" = 1
+   - "direct_quote" = the exact text\u0020
+5. Only set "existing_flag" = 0 if the answer does NOT appear anywhere
+   in the Original Context as a named or referenced evidence item.
+
+### Constraints:
+- The "direct_quote" must be copied 100% verbatim from the Original Context.
+- Table captions, figure captions, section headers, and in-text references
+  are all valid sources of evidence.
+\u0020\u0020
+Example:
+{{
+    "existing_flag": 0,
+    "direct_quote": null
+}}
+"""
+
+[[questions]]
+id = "metadata"
+prompt = """
+
+What are the study locations and study period in this study? Answer the above question and provide direct evidence.
+Note:\u0020
+1. 'Study locations' refer to the regions that were the focus or sites of this research.\u0020
+2. 'Study period' refer to the specific duration or timeframe during which the research or investigation is conducted.\u0020
+It indicates the time allocated for data collection, analysis, or other activities related to the study.
+3. Evidence refers to directly quoting the exact text or the titles of tables from the article. Do not perform any paraphrasing.\u0020
+Directly extract the content (full sentence or the Table titles) from the article that supports your answer.
+4. The latitude and longitude should be in decimal format
+The answer should be provided exclusively in JSON format, following the example structure below:
+{
+    "Study_location": {
+        "value": "Example location",
+        "evidence": "Exact source quote or table title",
+        "confidence_lv": 100
+    },
+    "Study_location_detail": {
+        "value": "Example province, city",
+        "evidence": "Exact source quote",
+        "confidence_lv": 100
+    },
+    "Study_period": {
+        "value": "2003-2017",
+        "evidence": "Exact source quote",
+        "confidence_lv": 80
+    },
+    "Latitude": {
+        "value": 45,
+        "evidence": "Exact source quote",
+        "confidence_lv": 100
+    },
+    "Longitude": {
+        "value": 130,
+        "evidence": "Exact source quote",
+        "confidence_lv": 90
+    }
+}
+"""
+kind = "text"
+items = ["Study_location", "Study_location_detail", "Study_period", "Latitude", "Longitude"]
+allowed_values = []
+require_unit = false
+require_experimental = false
+
+[[questions]]
+id = "species"
+prompt = """
+
+Which of the following species were cultured in the aquaculture ponds where this study measured CH4 flux? The value should be chosen only from the following selections:
+A [fish] B [shrimp] C [crab] D [mixed] E [others].
+
+Answer the above question and provide direct evidence.
+Note:
+1. Evidence refers to directly quoting the exact text or the titles of tables from the article. Do not perform any paraphrasing.\u0020
+Directly extract the content (full sentence or the Table titles) from the article that supports your answer.
+2. "mixed" refers to the culturing of multiple species in a single pond, for example, fish, shrimp, and crab.
+3. The above question refers to the species cultured in the aquaculture ponds of this study, excluding those from other research.
+
+The answer should be provided exclusively in JSON format, following the example structure below:
+{
+    "Specie": {
+        "value": "A [fish]",
+        "evidence": "Exact source quote or table title",
+        "confidence_lv": 100
+    }
+}
+"""
+kind = "text"
+items = ["Specie"]
+allowed_values = []
+require_unit = false
+require_experimental = false
+
+[[questions]]
+id = "flux"
+prompt = """
+
+What are the methane flux values for each of the comparative tests (e.g. different aquaculture ponds, experimental treatments, etc) measured in this study ?\u0020
+Answer the above question and provide direct evidence.
+
+Note:
+1. Extract only the methane flux from aquaculture ponds measured in this study. Flux refers to greenhouse gas emissions per unit time per unit area.\u0020
+Do not look only in the abstract; the answer is usually in the results section.
+4. Evidence refers to directly quoting the exact text or the titles of tables from the article. Do not perform any paraphrasing.\u0020
+Directly extract the content (full sentence or the Table titles) from the article that supports your answer.
+
+
+The answer should be provided exclusively in JSON format and may include multiple items, following the example structure below:
+{
+    "Flux-1": {
+        "value": 2.12,
+        "evidence": "Exact source quote or table title",
+        "confidence_lv": 95,
+        "unit": "mg m-2 h-1"
+    }
+}
+"""
+kind = "numeric"
+items = []
+allowed_values = []
+require_unit = true
+require_experimental = false
