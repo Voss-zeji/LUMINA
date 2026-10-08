@@ -99,10 +99,26 @@ flowchart LR
 ```bash
 git clone https://github.com/Voss-zeji/LUMINA.git
 cd LUMINA
-python -m pip install -r requirements.txt
+python install.py --venv .venv
 ```
 
-PDF 输入需要另行安装兼容的 `marker-pdf`，并明确允许准备转换资源；Markdown 输入无需该依赖。
+`install.py` 会创建或复用指定的 Python 3.12 venv，并将全部运行依赖、默认的 `marker-pdf` 和后备 `pypdf` 安装到其中。路径可自定义，例如 `python install.py --venv "D:/envs/lumina"`。已激活自己的 venv 时，也可直接运行 `python install.py`。安装器不会覆盖非 venv 的非空目录。
+
+安装完成后激活该环境，后续命令中的 `python` 均指向此环境：
+
+```powershell
+# Windows PowerShell；自定义路径时替换 .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+```bash
+# Linux / macOS
+source .venv/bin/activate
+```
+
+也可使用安装器打印的解释器完整路径运行，无需激活。Marker 安装或导入失败时，安装器会明确提示降级到 pypdf；若只需安装基础依赖，可加 `--skip-marker`；它不会移除已有 Marker，强制文字提取需设置下方的 `pdf.backend = "pypdf"`。
+
+PDF 是默认输入，程序在 `prepare` 阶段自动生成 Markdown，不需要手工预转换。Marker 首次运行可能下载 OCR／版面模型权重；示例中的 `allow_pdf_resources = true` 明确允许这一步。安装包本身不预下载这些权重，也不调用科研模型 API。首次模型准备时间计入 `max_runtime`，请为其预留时间或提前准备模型资源。
 
 复制 `configs/aqua`、`configs/wildfire` 或 `configs/generic` 为自己的研究目录。例如 PowerShell：
 
@@ -121,11 +137,21 @@ cp configs/my-study/secrets.example.toml configs/my-study/secrets.local.toml
 | 文件 | 填写内容 |
 |---|---|
 | `project.toml` | 模型及接口、研究名称、轮次、检索参数、试跑数量、输出位置、模型价格与四项预算 |
-| `papers.txt` | 每行一个 PDF 或 Markdown 路径 |
+| `papers.txt` | 每行一篇原始 PDF 的路径；已有 Markdown 仍可直接使用 |
 | `questions.toml` | 全部提示词、问题列表、文本／数值类型、字段与单位要求 |
 | `secrets.local.toml` | API 密钥；此文件被 Git 忽略 |
 
 所有相对路径以配置目录为基准。示例中的占位内容必须替换为真实设置；模型价格不能猜测。配置读取使用 Python 标准库 `tomllib`，无需新增配置解析依赖。
+
+PDF 转换设置也在 `project.toml` 中：
+
+```toml
+[pdf]
+backend = "marker"
+fallback = "pypdf"
+```
+
+`fallback = "none"` 可禁用后备。选择 `backend = "pypdf"` 时将 fallback 设为 `"none"`；此模式不下载 OCR 模型。pypdf 仅提取现有文字层，不能代替 OCR，遇到无文字页面会停止并提示使用 Marker。试跑报告中的 `preparation` 记录实际工具、版本及是否后备，研究者需检查表格和阅读顺序。[Marker 说明](https://github.com/datalab-to/marker) · [pypdf 文字提取说明](https://pypdf.readthedocs.io/en/stable/user/extract-text.html)
 
 新增主题时，编辑问题配置中的稳定 `id`、`prompt`、`kind`、`items`、`allowed_values`、`require_unit` 和 `require_experimental`。回答继续使用 `item/value/evidence/confidence_lv` 标量结构，按问题增加 `unit/experimental`；新增算法或嵌套回答结构需要 Python 开发。
 

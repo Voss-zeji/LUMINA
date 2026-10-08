@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 import shutil
 import sys
-from importlib.metadata import version
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -52,6 +51,7 @@ def _prepare(runtime):
     if hasattr(runtime.config, 'PROJECT'):
         print('Preparing documents', file=sys.stderr, flush=True)
     root = runtime.run_dir
+    pdf_cache = {}
     for paper in runtime.spec["papers"]:
         key = runtime.key("prepare", paper_uid=paper["paper_uid"])
         target = root / "outputs" / "prepared" / (paper["paper_uid"] + ".md")
@@ -66,15 +66,17 @@ def _prepare(runtime):
             source = root / "inputs" / (paper["paper_uid"] + paper["suffix"])
             converter = None
             if paper["suffix"] == ".pdf":
-                if not runtime.spec["allow_pdf_resources"]:
+                if runtime.spec['pdf']['backend'] == 'marker' and not runtime.spec["allow_pdf_resources"]:
                     runtime._gate("pdf_resources", key.task_id, "PDF model resource preparation was not explicitly allowed")
-                converter = version("marker-pdf")
                 pdf_dir = root / "checkpoints" / "pdf_inputs" / paper["paper_uid"]
                 pdf_dir.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(source, pdf_dir / source.name)
                 # A damaged derived Markdown must be rebuilt, not accepted by the legacy file-exists check.
                 target.unlink(missing_ok=True)
-                preparation.convert_pdfs_to_markdown(pdf_dir, target.parent)
+                conversions = {}
+                preparation.convert_pdfs_to_markdown(pdf_dir, target.parent, pdf_config=runtime.spec['pdf'],
+                                                     records=conversions, cache=pdf_cache)
+                converter = conversions[paper['paper_uid']]
             else:
                 shutil.copyfile(source, target)
             if not turnIntoPureText(target).strip():

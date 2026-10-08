@@ -111,14 +111,14 @@ class PreparationRegressions(unittest.TestCase):
             written = preparation.convert_pdfs_to_markdown(self.pdf_dir, self.md_dir)
         self.assertEqual(written, [])
 
-    def test_missing_optional_dependency_is_actionable(self):
+    def test_disabled_fallback_missing_marker_is_actionable(self):
         self.add_pdf("a.pdf")
         with patch.dict(sys.modules, {"marker": None, "marker.converters.pdf": None}):
-            with self.assertRaises(ImportError) as ctx:
-                preparation.convert_pdfs_to_markdown(self.pdf_dir, self.md_dir)
+            with self.assertRaises(RuntimeError) as ctx:
+                preparation.convert_pdfs_to_markdown(self.pdf_dir, self.md_dir, pdf_config={'fallback': 'none'})
         message = str(ctx.exception)
         self.assertIn("marker", message.lower())
-        self.assertIn("markdown_dir", message)
+        self.assertIn("install.py", message)
 
     def test_missing_pdf_dir_fails(self):
         with self.assertRaises(FileNotFoundError):

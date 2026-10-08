@@ -99,10 +99,26 @@ Use Python 3.12:
 ```bash
 git clone https://github.com/Voss-zeji/LUMINA.git
 cd LUMINA
-python -m pip install -r requirements.txt
+python install.py --venv .venv
 ```
 
-PDF input additionally requires a compatible `marker-pdf` installation and explicit resource-preparation permission. Markdown input does not.
+`install.py` creates or reuses the specified Python 3.12 venv and installs runtime dependencies, default `marker-pdf`, and fallback `pypdf` into it. Any venv path can be selected, for example `python install.py --venv "/path/to/lumina-env"`. With your own venv activated, `python install.py` uses that environment. Nonempty directories that are not venvs are refused.
+
+Activate the installed environment before the remaining `python` commands:
+
+```powershell
+# Windows PowerShell; replace .venv for a custom path
+.\.venv\Scripts\Activate.ps1
+```
+
+```bash
+# Linux / macOS
+source .venv/bin/activate
+```
+
+Alternatively, use the exact interpreter command printed by the installer. If Marker installation or import fails, setup clearly reports the pypdf fallback. `--skip-marker` installs only the lightweight dependencies. It does not remove an existing Marker installation; set `pdf.backend = "pypdf"` below to force text-only conversion.
+
+PDF is the default input. The prepare stage creates Markdown automatically. Marker may download OCR/layout weights on first use; the example's `allow_pdf_resources = true` explicitly permits that. Package installation alone does not prefetch weights or call scientific-model APIs. First-use model preparation counts toward `max_runtime`; budget time for it or prepare the resources beforehand.
 
 Copy `configs/aqua`, `configs/wildfire`, or `configs/generic` into your study directory:
 
@@ -121,11 +137,21 @@ Copy-Item configs/my-study/secrets.example.toml configs/my-study/secrets.local.t
 | File | User-editable inputs |
 |---|---|
 | `project.toml` | Models/endpoints, study identity, rounds, retrieval settings, trial size, output location, prices and four budgets |
-| `papers.txt` | One PDF or Markdown path per line |
+| `papers.txt` | One source PDF path per line; existing Markdown remains supported |
 | `questions.toml` | All prompts, question definitions, text/numeric types, item and unit rules |
 | `secrets.local.toml` | API keys; excluded from Git |
 
 Relative paths resolve from the configuration directory. Replace placeholders with your actual settings, including documented model prices. TOML is read with Python's standard-library `tomllib`.
+
+PDF conversion is configured in `project.toml`:
+
+```toml
+[pdf]
+backend = "marker"
+fallback = "pypdf"
+```
+
+Use `fallback = "none"` to disable fallback. For `backend = "pypdf"`, set fallback to `"none"`; this mode downloads no OCR models. pypdf extracts the existing text layer and cannot replace OCR: a page with no extractable text stops conversion instead of being silently omitted. The trial report's `preparation` section records the actual converter, version, and fallback status. Review tables and reading order. [Marker documentation](https://github.com/datalab-to/marker) · [pypdf text extraction](https://pypdf.readthedocs.io/en/stable/user/extract-text.html)
 
 A new topic changes question `id`, `prompt`, `kind`, `items`, `allowed_values`, `require_unit`, and `require_experimental` in configuration. Responses retain the scalar `item/value/evidence/confidence_lv` contract, with `unit/experimental` as needed. New algorithms or nested response structures require Python development.
 

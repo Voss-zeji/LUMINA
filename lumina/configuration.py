@@ -44,7 +44,7 @@ def load_config(config_path: str):
         raise ValueError('Configuration must be project.toml or a legacy .py file')
     raw = _read(path)
     sections = {'project', 'selected_models', 'models', 'providers', 'embedding', 'run', 'budget', 'pricing'}
-    _table(raw, sections, sections, 'project file')
+    _table(raw, sections | {'pdf'}, sections, 'project file')
     fields = {'domain', 'domain_knowledge', 'run_id', 'runs_dir', 'papers', 'questions', 'secrets',
               'rounds', 'smoke_size', 'stage', 'allow_pdf_resources'}
     project = _table(raw['project'], fields, {'domain', 'domain_knowledge', 'run_id', 'runs_dir'}, 'project')
@@ -99,8 +99,9 @@ def load_config(config_path: str):
     request = dict(domain=domain, papers=papers, rounds=project.get('rounds', [run.get('round_index')]),
                    smoke_size=project.get('smoke_size', 1), budget=raw['budget'], pricing=raw['pricing'],
                    allow_pdf_resources=project.get('allow_pdf_resources', False), advisor=None)
+    from .preparation import pdf_options
     cfg = dict(domain_knowledge=knowledge, questions=list(range(1, len(question_set['questions']) + 1)),
-               question_set=question_set)
+               question_set=question_set, pdf=pdf_options(raw.get('pdf')))
     config = SimpleNamespace(DOMAINS={domain: cfg}, FULL_LLM_POOL=models, SELECTED_KEYS=selected,
                              LLM_SETTINGS=settings, EMBEDDING_MODEL=embedding, RUN=run, REQUEST=request,
                              PROJECT=dict(run_id=run_id, runs_dir=str(runs_dir), stage=stage))
