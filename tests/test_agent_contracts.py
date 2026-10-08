@@ -78,6 +78,18 @@ class ContractTests(unittest.TestCase):
         self.config.SELECTED_KEYS = ["b", "renamed_alias"]
         self.assertEqual(first.fingerprint, self.spec().fingerprint)
 
+    def test_consensus_threshold_is_validated_and_frozen(self):
+        first = self.spec()
+        self.assertEqual(first.data['run']['min_consensus_models'], 2)
+        self.config.RUN['min_consensus_models'] = 2
+        self.assertEqual(first.scientific_hash, self.spec().scientific_hash)
+        self.config.RUN['min_consensus_models'] = 1
+        self.assertNotEqual(first.scientific_hash, self.spec().scientific_hash)
+        for value in (0, 3, True, 1.5):
+            self.config.RUN['min_consensus_models'] = value
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, 'min_consensus_models'):
+                self.spec()
+
     def test_secrets_are_excluded_and_endpoint_credentials_are_rejected(self):
         self.assertNotIn("SECRET-DO-NOT-PERSIST", self.spec().to_json())
         accidental = request_for(self.paper)

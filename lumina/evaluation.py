@@ -732,9 +732,9 @@ def _numeric_domain_question(domain: str, question: int) -> bool:
 def _variant_threshold(variant: str) -> Optional[float]:
     """The ``cross_score`` floor a filtered variant consumed, or None for full.
 
-    ``run_ensemble_for_domain`` builds each MiniCross variant by filtering
-    ``cross_score >= min_score`` *before* ensembling, so reproducing its
-    decimal-majority decision requires replaying that same filter.
+    Legacy MiniCross outputs replay their filtered decimal-majority policy.
+    Outputs marked dual_threshold instead bind a winner to its supporting
+    candidate IDs after both verification and model-consensus checks.
     """
     match = re.fullmatch(r"MiniCross(?P<score>\d+)", variant or "")
     return float(match.group("score")) if match else None
@@ -807,7 +807,7 @@ def _published_pair(row: Dict[str, Any]) -> Tuple[str, str, str]:
     unit = normalize_explicit_unit(row.get("unit"))
     ensemble_value = row.get("ensemble_value")
     scalar = _numeric_text(ensemble_value) or ""
-    if _truthy(row.get("unit_is_explicit")):
+    if _truthy(row.get("unit_is_explicit")) or row.get('aggregation_mode') == 'dual_threshold':
         return scalar, unit, (f"{scalar} {unit}" if scalar and unit else scalar)
     return scalar, unit, _text(ensemble_value)
 
@@ -895,6 +895,8 @@ def _result_rows(path: Path, round_index: int, variant: str, domain: str,
                 verdicts[cache_key] = (_decimal_majority(r.get("value") for r in contributing),
                                        _contribution_index(contributing))
             candidate_set_mode, (by_class_value, by_value) = verdicts[cache_key]
+            if row.get('aggregation_mode') == 'dual_threshold':
+                candidate_set_mode = False
 
             _, unit, normalized = _published_pair(row)
             # The published label is only a representative of one equivalence class, so
@@ -904,6 +906,9 @@ def _result_rows(path: Path, round_index: int, variant: str, domain: str,
             # one; the item label never selects an experiment on its own.
             witnesses = (by_value.get(normalized, []) if candidate_set_mode
                          else by_class_value.get((item_equivalence_key(item), normalized), []))
+            if row.get('aggregation_mode') == 'dual_threshold':
+                support_ids = set(_text(row.get('support_candidate_ids')).split('|')) - {''}
+                witnesses = [r for r in witnesses if _text(r.get('candidate_id')) in support_ids]
             experiment_id, identities = _identity(witnesses)
 
             # Every vote box this context produced, i.e. exactly what the core writes

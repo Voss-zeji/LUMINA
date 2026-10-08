@@ -409,7 +409,7 @@ def _ensemble_result_kind(path, incomplete, threshold):
     except Exception as exc:  # noqa: BLE001 - reported, never raised
         return "unreadable", f"{type(exc).__name__}: {exc}"
     if frame.empty:
-        return "legitimate_empty", "verification complete and no candidate passed this filter"
+        return "legitimate_empty", "verification complete and no record passed both consensus gates" if threshold is not None else "no diagnostic records"
     return "populated", None
 
 
@@ -430,6 +430,9 @@ def _thresholds(runtime, composites, verification, diagnostics) -> dict:
             path = (runtime.run_dir / "outputs" / f"R{round_index:02d}" / "ensemble" / folder
                     / f"{spec['domain']}_Ensemble_Result_Q{question:02d}_{label}.xlsx")
             kind, why = _ensemble_result_kind(path, incomplete, threshold)
+            accepted_records = None
+            if kind in {'legitimate_empty', 'populated'} and threshold is not None:
+                accepted_records = len(pd.read_excel(path))
             if kind in {"missing", "unreadable", "incomplete_verification"}:
                 _note(diagnostics, "ensemble", _rel(runtime, path), why)
             rows.append(dict(round_index=round_index, question=question,
@@ -438,10 +441,15 @@ def _thresholds(runtime, composites, verification, diagnostics) -> dict:
                              pass_rate=len(passing) / len(entries) if entries else None,
                              possible_upper_rate=(len(passing) + incomplete) / len(entries) if entries else None,
                              rate_status="lower_bound_incomplete" if incomplete else "complete",
-                             incomplete_candidates=incomplete, result_kind=kind))
+                             incomplete_candidates=incomplete, result_kind=kind,
+                             consensus_threshold=spec['run']['min_consensus_models'] if threshold is not None else None,
+                             accepted_records=accepted_records,
+                             aggregation_mode='diagnostic' if threshold is None else 'dual_threshold'))
         results[label] = rows
     return dict(thresholds=results,
-                policy="known passing / all evidence-eligible candidates; incomplete candidates never inflate "
+                policy="pass_rate is verification support only, not final acceptance; accepted_records requires "
+                       "both verification and distinct-source-model consensus. 00_full is diagnostic. "
+                       "known passing / all evidence-eligible candidates; incomplete candidates never inflate "
                        "the rate, and possible_upper_rate marks unresolved support; an empty filtered result is "
                        "legitimate_empty only when verification was complete, otherwise it is "
                        "incomplete_verification; this rate is not scientific accuracy")

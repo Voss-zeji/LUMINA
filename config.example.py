@@ -42,6 +42,9 @@ RUN = {
     "overlap_percent": 20,
     "text_extension": 1,
     "min_cross_scores": [1],
+    # Tbsl: distinct generating models supporting the verified mode (Tvfy AND Tbsl).
+    # Omit to use a strict majority of SELECTED_KEYS; the two-model example needs both.
+    "min_consensus_models": 2,
 }
 
 DOMAINS = {

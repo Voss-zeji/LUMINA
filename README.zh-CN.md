@@ -25,7 +25,7 @@ LUMINA 是用于定量科学综合的多模型框架。它结合文献结构化�
 |---|---|---|
 | **初始问答（Initial Query）** | 多个基础模型分别阅读文献并回答指定研究问题 | 候选数值、原文证据和模型自报置信度 |
 | **交叉核验（Cross-examination）** | 其他选定模型将引用证据与原文检索片段进行比对 | 核验判断及支持引文 |
-| **共识确认（Consensus Confirmation）** | 按证据支持程度筛选，并根据模型间的一致性汇总候选 | 结构化研究记录与候选明细 |
+| **共识确认（Consensus Confirmation）** | 同时满足证据核验与基础模型共识门槛，接受已核验候选中唯一的最高频答案 | 结构化研究记录与候选明细 |
 
 ```mermaid
 flowchart TD
@@ -35,7 +35,7 @@ flowchart TD
     Candidates --> Verify["由其他模型交叉核验"]
     Context --> Verify
     Verify --> Votes["核验判断与原文引文"]
-    Votes --> Consensus["共识确认：筛选与汇总"]
+    Votes --> Consensus["共识确认：Tvfy 与 Tbsl 同时通过"]
     Candidates --> Consensus
     Consensus --> Data["保留候选来源的科研数据集"]
     Data --> Review["研究者审核与后续分析"]
@@ -45,7 +45,7 @@ flowchart TD
 
 仓库中的核验任务检查证据是否存在及是否与主题相关。生成模型不参与自身候选的核验。选择 M 个抽取模型时，`cross_score` 统计其他模型的支持票，最高为 **M − 1**；`min_cross_scores` 设置核验阈值，`ensemble` 对相应候选进行标准化与汇总。
 
-稿件将证据支持与基础模型共识作为两个控制维度。仓库保留核验分数、候选频次和模型标识，便于检查每一步的筛选与汇总依据。
+共识确认要求**两个条件同时满足**：支持候选的核验票达到 `min_cross_scores`（T_vfy）；其标准化答案是已核验候选中唯一的最高频答案，且至少由 `min_consensus_models` 个不同抽取模型共同支持（T_bsl）。同一模型的重复行只计一票；不同指标、单位和明确的实验标识分别判断，并列最高票暂不接受。`MiniCrossNN` 保存正式接受记录与候选判定明细；`00_full` 是未筛选的诊断基线，不代表正式接受的数据集。
 
 ## 3. 研究任务与论文案例
 
@@ -138,7 +138,7 @@ cp config.example.py config.py
 
 chat 使用 OpenAI 兼容的 `chat.completions` 接口，embedding 使用直接 HTTP POST。`supports_json_mode=True` 请求 JSON 对象，随后由 JSON5 解析器和本地字段规则处理。密钥保存在被 Git 忽略的本地 `config.py` 中。
 
-选择 M 个抽取模型时，每个核验阈值应在 1 到 M − 1 之间。双模型示例使用 `min_cross_scores: [1]`。
+选择 M 个抽取模型时，核验阈值应在 1 到 M − 1 之间，`min_consensus_models` 必须是 1 到 M 之间的整数。省略共识设置时，默认采用完整所选模型池的严格多数（`M // 2 + 1`），并写入冻结的 Agent 规格。这是可配置的默认值，不是稿件规定的固定实验数值。双模型示例使用 `min_cross_scores: [1]` 和 `min_consensus_models: 2`。更改门槛或科学算法后需要新建 Agent run；已有结果表不会被自动改写。
 
 ## 6. 运行任务
 

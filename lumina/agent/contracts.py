@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from .. import prompts
+from .. import ensemble, prompts
 from ..common import atomic_output, canonical_paper_id, fingerprint, save_json
 
 FORMAT_VERSION = 1
@@ -149,8 +149,9 @@ class ResearchSpecification:
             raise ValueError("selected model names collide; independent model identities must be unique")
         embedding = _model(config.EMBEDDING_MODEL, config.LLM_SETTINGS, embedding=True)
         run = dict(config.RUN)
-        if set(run) != RUN_FIELDS:
+        if set(run) - {'min_consensus_models'} != RUN_FIELDS:
             raise ValueError("RUN must explicitly contain exactly the supported scientific settings")
+        run['min_consensus_models'] = ensemble.consensus_threshold(names, run)
         _number(run["round_index"], "round_index", integer=True, strict=True)
         _number(run["temperature"], "temperature")
         if run["temperature"] > 2:
@@ -221,7 +222,8 @@ class ResearchSpecification:
                     scientific_code={name: file_hash(core / name) for name in SCIENTIFIC_FILES},
                     control_code={str(path.relative_to(core.parent)).replace("\\", "/"): file_hash(path)
                                   for path in [core.parent / "run_pipeline.py", *sorted((core / "agent").glob("*.py"))]},
-                    policies=dict(cross="evidence existence and relevance", numeric="decimal majority retains candidates",
+                    policies=dict(cross="evidence existence and relevance", numeric="verified unique mode with distinct model consensus",
+                                  consensus="Tvfy AND Tbsl; 00_full is diagnostic; ties are unaccepted",
                                   units="no automatic unit conversion", verification="all independent selected models"))
         serialized = json.dumps(data, ensure_ascii=False, sort_keys=True, allow_nan=False)
         for provider in config.LLM_SETTINGS.values():
