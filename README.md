@@ -11,6 +11,19 @@ LUMINA is a multi-model framework for quantitative scientific synthesis. It comb
 
 This repository provides a configurable extraction, cross-examination, and consensus pipeline. Aqua and Wildfire are included studies; new text or numeric research topics can be defined in configuration.
 
+## 3-minute command-line tutorials
+
+Follow the terminal workflow: open and edit configuration files, enter model and API settings, select PDFs and prompts, check the configuration, and view Stage 1 execution and results. Both videos are **3 minutes, 1080p**, with **Chinese and English subtitles**.
+
+[![LUMINA command-line tutorial preview](docs/assets/cli-tutorial-preview.png)](https://github.com/Voss-zeji/LUMINA/releases/tag/tutorial-2026-10-13)
+
+| Narration | Video |
+|---|---|
+| 中文（普通话） | [Download Chinese-narrated MP4](https://github.com/Voss-zeji/LUMINA/releases/download/tutorial-2026-10-13/lumina-cli-tutorial-zh.mp4) |
+| English | [Download English-narrated MP4](https://github.com/Voss-zeji/LUMINA/releases/download/tutorial-2026-10-13/lumina-cli-tutorial-en.mp4) |
+
+Click the preview to open the [tutorial release](https://github.com/Voss-zeji/LUMINA/releases/tag/tutorial-2026-10-13), or download either video using the links above.
+
 ## 1. Scientific purpose
 
 Scientific synthesis requires extracting values together with their units, study settings, and experimental context. LUMINA organizes that work around **paper × question × model × round**. Each model returns candidate answers and supporting text; other models check the evidence before the candidates are aggregated.

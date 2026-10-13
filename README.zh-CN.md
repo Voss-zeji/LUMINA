@@ -11,6 +11,19 @@ LUMINA 是用于定量科学综合的多模型框架。它结合文献结构化�
 
 本仓库提供可配置的文献抽取、交叉核验与共识确认流水线。Aqua 和 Wildfire 是内置研究配置，也可仅编辑配置接入新的文本或数值研究主题。
 
+## 三分钟命令行视频教程
+
+跟随真实终端操作，了解如何打开和编辑配置文件、输入模型与接口地址、指定 PDF 与提取问题、检查配置，以及查看 Stage 1 的执行和结果。两版视频均为 **3 分钟、1080p**，配有**中英文字幕**。
+
+[![LUMINA 命令行教程预览](docs/assets/cli-tutorial-preview.png)](https://github.com/Voss-zeji/LUMINA/releases/tag/tutorial-2026-10-13)
+
+| 配音语言 | 视频 |
+|---|---|
+| 中文（普通话） | [下载中文配音版 MP4](https://github.com/Voss-zeji/LUMINA/releases/download/tutorial-2026-10-13/lumina-cli-tutorial-zh.mp4) |
+| English | [下载英文配音版 MP4](https://github.com/Voss-zeji/LUMINA/releases/download/tutorial-2026-10-13/lumina-cli-tutorial-en.mp4) |
+
+点击预览图进入[教程发布页](https://github.com/Voss-zeji/LUMINA/releases/tag/tutorial-2026-10-13)，也可通过上面的链接下载视频后播放。
+
 ## 1. 科研目的
 
 科学综合需要将数值与其单位、研究背景和实验条件一并提取。LUMINA 以**文献 × 问题 × 模型 × 轮次**组织任务：多个模型分别给出候选回答和原文证据，其他模型核验证据，再对候选结果进行汇总。
