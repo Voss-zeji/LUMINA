@@ -203,13 +203,13 @@ def _snapshot(run: Path, connection: sqlite3.Connection, events: list[dict], acc
     stage_finishes = [e for e in events if e["kind"] == "stage_finished"]
     latest_finished = stage_finishes[-1]["payload"] if stage_finishes else {}
     current = None
-    finished_keys = {(e["payload"].get("stage"), e["payload"].get("round_index"),
-                      tuple(e["payload"].get("scope", []))) for e in stage_finishes}
-    for event in reversed(stage_starts):
-        payload = event["payload"]
-        key = (payload.get("stage"), payload.get("round_index"), tuple(payload.get("scope", [])))
-        if key not in finished_keys:
-            current = payload | {"event_id": event["event_id"], "started_at": event["at"]}
+    # Stages execute sequentially. A prior completion must not mask a later
+    # invocation with the same task ID (trial/batch or interrupted resume).
+    for event in reversed(events):
+        if event["kind"] == "stage_started":
+            current = event["payload"] | {"event_id": event["event_id"], "started_at": event["at"]}
+            break
+        if event["kind"] == "stage_finished":
             break
     phase = (current or {}).get("phase") or latest_finished.get("phase") or _phase(state)
     scope = list((current or {}).get("scope") or latest_finished.get("scope") or _scope_from(spec, state))
@@ -263,9 +263,14 @@ def _snapshot(run: Path, connection: sqlite3.Connection, events: list[dict], acc
     context_round = current_round
     context_scope = set(scope)
     task_by_id = {task["task_id"]: task for task in tasks}
+    context_start = next((event["event_id"] for event in reversed(stage_starts)
+                          if event["payload"].get("stage") == context_stage
+                          and event["payload"].get("phase") == phase
+                          and event["payload"].get("round_index") == context_round
+                          and set(event["payload"].get("scope", [])) == context_scope), 0)
 
     def cache_event_in_context(event):
-        if event["kind"] not in {"cache_hit", "response_reused"}:
+        if event["kind"] not in {"cache_hit", "response_reused"} or event["event_id"] < context_start:
             return False
         task = task_by_id.get(event["payload"].get("task_id"))
         if task is None or task.get("stage") != context_stage:

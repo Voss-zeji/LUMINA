@@ -167,3 +167,9 @@ A second actual Windows PTY demonstration used the custom `pdf-install-smoke` ve
 with Marker installed and Chinese UI. Imports passed, installation was skipped,
 ASCII/group defaults appeared and draft exit succeeded. No OCR weights or real
 research requests were started.
+
+Post-review display correction: phase/resume stage detection now uses event order,
+and cache counts are bounded by the current stage/round invocation. A same-scope
+trial-to-batch/resume regression verifies that old cache events cannot inflate the
+new display. The 22 progress/controller/configuration tests passed (67.268 s).
+Delivery PR: https://github.com/Voss-zeji/LUMINA/pull/8 (cross-platform checks pending).

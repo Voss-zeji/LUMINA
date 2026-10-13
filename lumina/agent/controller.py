@@ -289,8 +289,14 @@ def _round_progress_counts(runtime, paper_uids, round_index) -> dict:
                          for status in ("succeeded", "failed", "unresolved", "pending")}
         task_by_id = {t["task_id"]: t for t in tasks}
         scoped_cache_events = 0
-        for event in runtime.store._events():
-            if event["kind"] not in {"cache_hit", "response_reused"}:
+        events = runtime.store._events()
+        round_start = next((event["event_id"] for event in reversed(events)
+                            if event["kind"] == "round_started"
+                            and event["payload"].get("round_index") == round_index
+                            and set(event["payload"].get("scope", [])) == scope
+                            and event["payload"].get("phase") == _progress_phase(runtime)), 0)
+        for event in events:
+            if event["kind"] not in {"cache_hit", "response_reused"} or event["event_id"] < round_start:
                 continue
             task = task_by_id.get(event["payload"].get("task_id"))
             if task is not None and task in leaf:

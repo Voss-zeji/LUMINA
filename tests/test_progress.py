@@ -8,6 +8,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 from lumina.agent.store import Store
 from lumina.progress import ProgressMonitor, accepted_round_data, format_progress, format_round_summary
@@ -81,6 +82,33 @@ class ProgressTests(unittest.TestCase):
         self.assertIsNone(snapshot["cost"]["total_cost"])
         self.assertEqual(snapshot["cost"]["unpriced_requests"], 1)
         self.assertFalse(snapshot["cost"]["cost_complete"])
+
+    def test_same_scope_batch_and_resume_do_not_recount_trial_cache(self):
+        from lumina.agent.controller import _round_progress_counts
+        with Store(self.run) as store:
+            for state in ('PREFLIGHT', 'INPUT_READY', 'SMOKE', 'HUMAN_GATE_SMOKE', 'BATCH'):
+                store.set_state(state, 'fixture')
+            task = self._artifact_task(store, 'examiner',
+                                       dict(paper_uid='p1', question=1, round_index=1), 'reused')
+            payload = dict(stage='examiner', round_index=1, scope=['p1'], phase='trial')
+            store.event('round_started', payload)
+            store.event('stage_started', payload)
+            store.event('cache_hit', dict(task_id=task))
+            store.event('stage_finished', payload)
+            batch = payload | dict(phase='batch')
+            store.event('round_started', batch)
+            store.event('stage_started', batch)
+            store.event('cache_hit', dict(task_id=task))
+            snapshot = ProgressMonitor(self.run).snapshot()
+            self.assertEqual(snapshot['current']['phase'], 'batch')
+            self.assertEqual(snapshot['cache_reuse'], 1)
+            counters = _round_progress_counts(SimpleNamespace(store=store), ['p1'], 1)
+            self.assertEqual(counters['cache_reuse'], 1)
+            store.event('stage_finished', batch)
+            store.event('stage_started', batch)
+            resumed = ProgressMonitor(self.run).snapshot()
+            self.assertEqual(resumed['current']['phase'], 'batch')
+            self.assertEqual(resumed['cache_reuse'], 0)
 
     def test_long_wait_heartbeat_without_event_growth(self):
         stream = io.StringIO()
