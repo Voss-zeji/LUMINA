@@ -4,7 +4,10 @@ import sys
 import tempfile
 import time
 import unittest
+from contextlib import redirect_stderr
+from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from lumina.agent.contracts import ResearchSpecification, create_run
 from lumina.agent.store import Store
@@ -73,6 +76,66 @@ class WorkerTests(unittest.TestCase):
         run = self.run_dir(30)
         with self.assertRaisesRegex(RuntimeError, "control receipt"):
             supervise(run, self.root / "unused.py", worker_command=[sys.executable, "-c", "raise SystemExit(3)"])
+
+    def test_optional_runtime_keeps_supervision_without_total_deadline(self):
+        run = self.run_dir(None)
+        script = "import json,time; time.sleep(.2); print(json.dumps({'state':'PAUSED'}))"
+        result = supervise(run, self.root / "unused.py", worker_command=[sys.executable, "-c", script])
+        self.assertEqual(result, {"state": "PAUSED"})
+
+    def test_progress_supervision_preserves_machine_receipt(self):
+        run = self.run_dir(10)
+        script = "import json,time; time.sleep(.5); print(json.dumps({'state':'PAUSED'}))"
+        stream = StringIO()
+        with redirect_stderr(stream):
+            result = supervise(run, self.root / "unused.py", worker_command=[sys.executable, "-c", script],
+                               progress=True, language="zh")
+        self.assertEqual(result, {"state": "PAUSED"})
+        self.assertIn("阶段", stream.getvalue())
+
+    def test_slow_progress_observer_cannot_delay_receipt_or_deadline(self):
+        run = self.run_dir(10)
+        script = "import json,time; time.sleep(.2); print(json.dumps({'state':'PAUSED'}))"
+
+        class SlowMonitor:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def emit(self):
+                time.sleep(5)
+
+        start = time.monotonic()
+        with patch("lumina.agent.worker.ProgressMonitor", SlowMonitor):
+            result = supervise(run, self.root / "unused.py", worker_command=[sys.executable, "-c", script],
+                               progress=True)
+        self.assertEqual(result, {"state": "PAUSED"})
+        self.assertLess(time.monotonic() - start, 2)
+
+    def test_progress_observer_makes_final_emit_after_child_receipt(self):
+        run = self.run_dir(10)
+        script = "import json,time; time.sleep(.5); print(json.dumps({'state':'PAUSED'}))"
+
+        class CountingMonitor:
+            def __init__(self, *args, **kwargs):
+                self.calls = 0
+
+            def emit(self):
+                self.calls += 1
+
+        monitor = CountingMonitor()
+        with patch("lumina.agent.worker.ProgressMonitor", return_value=monitor):
+            result = supervise(run, self.root / "unused.py", worker_command=[sys.executable, "-c", script],
+                               progress=True)
+        self.assertEqual(result, {"state": "PAUSED"})
+        self.assertGreaterEqual(monitor.calls, 2)
+
+    def test_progress_supervision_drains_large_machine_receipt(self):
+        run = self.run_dir(10)
+        script = "import json; print(json.dumps({'state':'PAUSED','payload':'x' * (256 * 1024)}))"
+        result = supervise(run, self.root / "unused.py", worker_command=[sys.executable, "-c", script],
+                           progress=True)
+        self.assertEqual(result["state"], "PAUSED")
+        self.assertEqual(len(result["payload"]), 256 * 1024)
 
 
 if __name__ == "__main__":

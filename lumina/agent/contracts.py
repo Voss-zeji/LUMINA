@@ -14,6 +14,7 @@ from urllib.parse import urlsplit
 
 from .. import ensemble, preparation, prompts
 from ..common import atomic_output, canonical_paper_id, filename_token, fingerprint, save_json
+from ..pricing import quote_endpoint
 
 FORMAT_VERSION = 1
 SCIENTIFIC_FILES = (
@@ -21,7 +22,7 @@ SCIENTIFIC_FILES = (
     "cross_validation.py", "ensemble.py", "ensemble_utils_meta.py", "ensemble_utils_value.py",
 )
 RUN_FIELDS = {"round_index", "temperature", "chunk_size", "overlap_percent", "text_extension", "min_cross_scores"}
-SPEC_FIELDS = {"domain", "papers", "rounds", "budget", "pricing", "smoke_size", "smoke_papers", "advisor", "allow_pdf_resources"}
+SPEC_FIELDS = {"domain", "papers", "rounds", "budget", "pricing", "request_limits", "smoke_size", "smoke_papers", "advisor", "allow_pdf_resources"}
 BUDGET_FIELDS = {"max_calls", "max_tokens", "max_cost", "max_runtime"}
 RESERVED_NAMES = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
 
@@ -41,6 +42,10 @@ def _number(value, name: str, minimum=0, integer=False, strict=False):
     return value
 
 
+def _optional_number(value, name: str, *, integer=False, strict=False):
+    return None if value is None else _number(value, name, integer=integer, strict=strict)
+
+
 def endpoint(value) -> str:
     if not isinstance(value, str):
         raise ValueError("endpoint must be an explicit URL")
@@ -57,15 +62,83 @@ def _model(model: dict, settings: dict, *, embedding=False) -> dict:
     provider = settings[source]
     result = dict(model=name, source=source,
                   endpoint=endpoint((model.get("url") if embedding else None) or provider.get("url")))
-    for field in ('timeout_seconds', 'rate_limit_seconds'):
-        if field in model:
-            result[field] = _number(model[field], field, strict=field == 'timeout_seconds')
+    result["timeout_seconds"] = _number(model.get("timeout_seconds", 120), "timeout_seconds", strict=True)
+    if "rate_limit_seconds" in model:
+        result["rate_limit_seconds"] = _number(model["rate_limit_seconds"], "rate_limit_seconds")
+    result["max_input_tokens"] = _optional_number(
+        model.get("max_input_tokens"), "max_input_tokens", integer=True)
+    result["max_output_tokens"] = _optional_number(
+        model.get("max_output_tokens", 0 if embedding else 4096),
+        "max_output_tokens", integer=True, strict=not embedding)
     if not embedding:
         json_mode = provider.get("supports_json_mode", True)
         if type(json_mode) is not bool:
             raise ValueError("supports_json_mode must be a boolean")
         result["supports_json_mode"] = json_mode
         result["limit_token"] = _number(model.get("limit_token", 10**9), "limit_token", strict=True, integer=True)
+    return result
+
+
+PRICE_FIELDS = {
+    "input_per_million", "output_per_million", "max_input_tokens", "max_output_tokens",
+    "basis", "base_url", "currency", "source", "fetched_at", "as_of",
+}
+
+
+def _pricing(raw: dict, required_models: set[str], endpoints: dict[str, str]) -> dict:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("pricing must be a model table")
+    if set(raw) - required_models:
+        raise ValueError("pricing contains a model outside the frozen request")
+    result = {}
+    for model in sorted(required_models):
+        value = raw.get(model, {})
+        if not isinstance(value, dict) or set(value) - PRICE_FIELDS:
+            raise ValueError(f"pricing for {model} has unknown fields")
+        row = {"basis": value.get("basis", "") or ""}
+        if not isinstance(row["basis"], str):
+            raise ValueError(f"pricing {model}.basis must be text")
+        if "base_url" in value and value["base_url"] is not None:
+            supplied = quote_endpoint(value["base_url"])
+            actual = quote_endpoint(endpoints[model])
+            if supplied != actual:
+                raise ValueError(f"pricing {model}.base_url does not match the frozen model endpoint")
+            row["base_url"] = supplied
+        for field in ("currency", "source", "fetched_at", "as_of"):
+            metadata = value.get(field)
+            if metadata is not None and not isinstance(metadata, str):
+                if field in {"fetched_at", "as_of"} and hasattr(metadata, "isoformat"):
+                    metadata = metadata.isoformat()
+                else:
+                    raise ValueError(f"pricing {model}.{field} must be text")
+            row[field] = metadata
+        rates = []
+        for field in ("input_per_million", "output_per_million"):
+            rate = value.get(field)
+            if rate is not None:
+                rate = _number(rate, f"pricing {model}.{field}")
+            rates.append(rate)
+        row["input_per_million"], row["output_per_million"] = rates
+        if (rates[0] is None) != (rates[1] is None):
+            row["input_per_million"] = row["output_per_million"] = None
+        if row["input_per_million"] is not None and not row["basis"].strip():
+            raise ValueError(f"pricing {model} requires a price basis when rates are known")
+        currency = row.get("currency")
+        if currency is not None:
+            if not re.fullmatch(r"[A-Za-z]{3}", currency):
+                raise ValueError(f"pricing {model}.currency must be a three-letter code")
+            row["currency"] = currency.upper()
+        for field in ("max_input_tokens", "max_output_tokens"):
+            if field in value and value[field] is not None:
+                row[field] = _number(value[field], f"pricing {model}.{field}",
+                                     integer=True, strict=field == "max_input_tokens")
+        result[model] = row
+    currencies = {row["currency"] or "__configured_unit__" for row in result.values()
+                  if row["input_per_million"] is not None}
+    if len(currencies) > 1:
+        raise ValueError("known pricing rates must use one comparable currency")
     return result
 
 
@@ -176,11 +249,15 @@ class ResearchSpecification:
         rounds = sorted(rounds)
         # round_index describes legacy defaults; the explicit rounds list is authoritative here.
         run["round_index"] = rounds[0]
-        budget = request.get("budget")
-        if not isinstance(budget, dict) or set(budget) != BUDGET_FIELDS:
-            raise ValueError("budget requires max_calls, max_tokens, max_cost and max_runtime")
+        budget = request.get("budget", {})
+        if budget is None:
+            budget = {}
+        if not isinstance(budget, dict) or set(budget) - BUDGET_FIELDS:
+            raise ValueError("budget has unknown fields")
+        budget = {key: budget.get(key) for key in sorted(BUDGET_FIELDS)}
         for key, value in budget.items():
-            _number(value, key, integer=key in {"max_calls", "max_tokens"}, strict=True)
+            if value is not None:
+                _number(value, key, integer=key in {"max_calls", "max_tokens"}, strict=True)
         advisor = request.get("advisor")
         if advisor is not None:
             if not isinstance(advisor, dict) or set(advisor) != {"model", "source"}:
@@ -189,15 +266,35 @@ class ResearchSpecification:
         required_models = {m["model"] for m in models} | {embedding["model"]}
         if advisor:
             required_models.add(advisor["model"])
-        pricing = request.get("pricing")
-        if not isinstance(pricing, dict) or set(pricing) != required_models:
-            raise ValueError("pricing must cover exactly every scientific, embedding and optional advisor model")
-        price_fields = {"input_per_million", "output_per_million", "max_input_tokens", "max_output_tokens", "basis"}
-        for model, price in pricing.items():
-            if not isinstance(price, dict) or set(price) != price_fields or not isinstance(price["basis"], str) or not price["basis"].strip():
-                raise ValueError(f"pricing for {model} requires rates, input/output bounds and price basis")
-            for field in price_fields - {"basis"}:
-                _number(price[field], field, integer=field.startswith("max_"), strict=field.startswith("max_"))
+        endpoints = {model["model"]: model["endpoint"] for model in models}
+        endpoints[embedding["model"]] = embedding["endpoint"]
+        if advisor:
+            endpoints[advisor["model"]] = advisor["endpoint"]
+        pricing = _pricing(request.get("pricing"), required_models, endpoints)
+        if budget["max_cost"] is not None:
+            missing = [model for model, price in pricing.items()
+                       if price["input_per_million"] is None]
+            if missing:
+                raise ValueError("budget.max_cost requires complete input/output pricing for: "
+                                 + ", ".join(missing))
+
+        raw_models = getattr(config, "FULL_LLM_POOL", {})
+        request_limits = {}
+
+        def limits_for(frozen, raw_model, model_name):
+            raw_model = raw_model if isinstance(raw_model, dict) else {}
+            price = pricing[model_name]
+            input_limit = frozen["max_input_tokens"] if "max_input_tokens" in raw_model else price.get("max_input_tokens")
+            output_limit = frozen["max_output_tokens"] if "max_output_tokens" in raw_model else price.get(
+                "max_output_tokens", frozen["max_output_tokens"])
+            return dict(max_input_tokens=input_limit, max_output_tokens=output_limit)
+
+        for key, frozen in zip(keys, models):
+            request_limits[frozen["model"]] = limits_for(frozen, raw_models.get(key), frozen["model"])
+        request_limits[embedding["model"]] = limits_for(
+            embedding, getattr(config, "EMBEDDING_MODEL", {}), embedding["model"])
+        if advisor:
+            request_limits[advisor["model"]] = limits_for(advisor, {}, advisor["model"])
         smoke_size = _number(request.get("smoke_size", 1), "smoke_size", integer=True, strict=True)
         if smoke_size > len(papers):
             raise ValueError("smoke_size exceeds paper count")
@@ -221,7 +318,8 @@ class ResearchSpecification:
         core = Path(__file__).resolve().parents[1]
         data = dict(format_version=FORMAT_VERSION, domain=domain, papers=papers,
                     domain_knowledge=domain_cfg["domain_knowledge"], models=models, embedding=embedding,
-                    run=run, rounds=rounds, budget=budget, pricing=pricing, smoke_size=smoke_size,
+                    run=run, rounds=rounds, budget=budget, pricing=pricing, request_limits=request_limits,
+                    smoke_size=smoke_size,
                     smoke_paper_uids=sorted(smoke_uids),
                     advisor=advisor, allow_pdf_resources=allow_pdf,
                     question_set=definition, pdf=preparation.pdf_options(domain_cfg.get('pdf')),

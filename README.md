@@ -99,6 +99,28 @@ Use Python 3.12:
 ```bash
 git clone https://github.com/Voss-zeji/LUMINA.git
 cd LUMINA
+python start.py --venv .venv
+```
+
+`start.py` prepares the selected Python 3.12 venv, installs default dependencies on first use, then opens an ASCII welcome and interactive wizard. A healthy environment skips installation and package upgrades on later starts. Activation is unnecessary. Use any path with `--venv`; without it the active venv is used, otherwise the repository `.venv`.
+
+Choose **new study**, **load and edit**, or **resume**. Chinese is the default; `--lang en` selects English. Language and the last configuration location are remembered locally:
+
+```bash
+python start.py --venv .venv --lang en --config configs/my-study/project.toml
+```
+
+The wizard groups study identity, PDF selection and extraction, prompts, embedding retrieval, verification/consensus thresholds, rounds and costs. It asks for key inputs and displays advanced defaults before optional editing. Enter keeps the displayed value; `-` clears optional prices or caps. PDF scans support subdirectories and exclusions. Prompts support preview, import and an external editor. Keys are entered without echo.
+
+Each group supports back/edit or private draft save. Finish with save only, offline validation, or a trial. Batch execution still requires explicit approval after reviewing the trial. Resume uses frozen conditions; changed research settings require a new run ID. New studies default to round `[1]`, one trial paper, verification threshold 1, and a strict majority of distinct models for consensus.
+
+Call, token, money and total wall-time caps may each be omitted. Unknown prices stay unknown. A money cap requires complete pricing in one currency. See [quotes and optional budgets](CONFIGURATION.md#optional-budgets-and-quotes--可选预算与报价). New requests default to a 120-second timeout and 4,096 output tokens; explicit legacy bounds remain effective.
+
+Runtime feedback includes phase, round, waits, completed/failed/cached work and per-round output paths, separately for each threshold. Redacted setup logs start in Git-ignored `runs/_setup/` and are linked under the run's `reports/setup/`. Noninteractive execution never enters the wizard; use the existing commands below.
+
+### Manual setup (still supported)
+
+```bash
 python install.py --venv .venv
 ```
 
@@ -141,7 +163,9 @@ Copy-Item configs/my-study/secrets.example.toml configs/my-study/secrets.local.t
 | `questions.toml` | All prompts, question definitions, text/numeric types, item and unit rules |
 | `secrets.local.toml` | API keys; excluded from Git |
 
-Relative paths resolve from the configuration directory. Replace placeholders with your actual settings, including documented model prices. TOML is read with Python's standard-library `tomllib`.
+On Windows without long-path support, choose a short results root such as `D:/lumina-runs`; candidate and checkpoint filenames can exceed the system limit under deeply nested directories.
+
+Relative paths resolve from the configuration directory. Replace placeholders with your actual settings, including prices when known; unknown rates can be omitted. Execution reads TOML with standard-library `tomllib`; the wizard uses TOML Kit to preserve comments when saving.
 
 PDF conversion is configured in `project.toml`:
 
@@ -175,7 +199,7 @@ The first invocation processes a small trial. Review `smoke_report.json`, output
 
 The same `project.run_id` identifies one run. Changed papers, models, prompts, question rules, scientific settings, or budgets require a new run ID; incompatible cached results are rejected. The stage stop position can change. Exit codes are 0 for success, 2 for pause/required confirmation, and 1 for errors.
 
-`max_runtime` includes elapsed waiting and review time from run creation. Requests with unknown outcomes retain their reservations and require reconciliation rather than blind retries. Diagnostics live in `reports/`.
+When set, `max_runtime` includes elapsed waiting and review time from run creation; omission leaves total wall time uncapped. Requests with unknown outcomes retain their reservations and require reconciliation rather than blind retries. Diagnostics live in `reports/`.
 
 The legacy Python configuration and commands remain supported. See [configuration and migration](CONFIGURATION.md). Historical runs are not rewritten; incompatible runs require their original revision or a new run. [Advanced operations](AGENT_GUIDE.md) cover diagnostics, independent reference evaluation, and request reconciliation.
 

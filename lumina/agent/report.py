@@ -633,12 +633,36 @@ def _outcome(state, pending, archived) -> str:
     return "incomplete"
 
 
+def _cost_summary(totals: dict) -> dict:
+    """Expose new optional-cost fields while remaining readable for old ledgers."""
+    known = totals.get("known_cost")
+    held = totals.get("held_cost")
+    unpriced = totals.get("unpriced_requests")
+    if unpriced is None:
+        unpriced = (totals.get("unknown_usage", 0) or 0) + (totals.get("unknown_requests", 0) or 0)
+    if not isinstance(unpriced, int) or unpriced < 0:
+        unpriced = 0
+    complete = totals.get("cost_complete")
+    if not isinstance(complete, bool):
+        complete = unpriced == 0
+    if "total_cost" in totals:
+        total = totals["total_cost"]
+    else:
+        # Old ledgers only prove the settled subtotal; do not call unknown cost zero.
+        total = known if complete else None
+    return dict(total_cost=total, unpriced_requests=unpriced, cost_complete=complete,
+                known_cost=known, known_cost_subtotal=known, held_cost=held)
+
+
 # ------------------------------------------------------------------ public
 
 def write_report(runtime, name="final_report", *, paper_uids=None, final_qc=None):
     spec, store = runtime.spec, runtime.store
     scope = set(paper_uids or [p["paper_uid"] for p in spec["papers"]])
-    snapshot, totals = store.snapshot(), runtime.budget.totals()
+    snapshot, totals = store.snapshot(), dict(runtime.budget.totals() or {})
+    cost = _cost_summary(totals)
+    for field, value in cost.items():
+        totals.setdefault(field, value)
     events = store._events()
     diagnostics = []
     expected = len(scope) * len(spec["models"]) * len(spec["questions"]) * len(spec["rounds"])
@@ -696,6 +720,8 @@ def write_report(runtime, name="final_report", *, paper_uids=None, final_qc=None
         inputs=[{k: p[k] for k in ("paper_uid", "sha256", "display_name")}
                 for p in spec["papers"] if p["paper_uid"] in scope],
         models=spec["models"], scientific_code=spec["scientific_code"], budget=totals,
+        total_cost=cost["total_cost"], unpriced_requests=cost["unpriced_requests"],
+        cost_complete=cost["cost_complete"], known_cost_subtotal=cost["known_cost_subtotal"],
         preparation=preparation_records,
         budget_limits=spec["budget"],
         pricing_basis={m: p["basis"] for m, p in spec["pricing"].items()},
@@ -711,7 +737,9 @@ def write_report(runtime, name="final_report", *, paper_uids=None, final_qc=None
                    unknown_usage=totals.get("unknown_usage"),
                    unknown_requests=totals.get("unknown_requests"), imports=totals.get("imports")),
         tokens=dict(known=totals.get("known_tokens"), held=totals.get("held_tokens")),
-        costs=dict(known=totals.get("known_cost"), held=totals.get("held_cost")),
+        costs=dict(total_cost=cost["total_cost"], unpriced_requests=cost["unpriced_requests"],
+                   cost_complete=cost["cost_complete"], known_cost=cost["known_cost_subtotal"],
+                   known_cost_subtotal=cost["known_cost_subtotal"], held_cost=cost["held_cost"]),
         cache_hits=sum(e["kind"] in {"cache_hit", "response_reused"} for e in events),
         imports=totals.get("imports"),
         fingerprints=dict(specification=snapshot["run"]["spec_hash"],

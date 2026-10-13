@@ -17,7 +17,7 @@ CORE_REQUIREMENTS = "requirements.txt"
 PDF_REQUIREMENTS = "requirements-pdf.txt"
 PDF_WARNING = "marker-pdf is not verified as ready by this setup"
 EXAMPLE_CONFIG = "configs/my-study/project.toml"
-CORE_PROBES = ("pypdf", "lumina.configuration", "lumina.agent.runtime", "lumina.cross_validation", "tiktoken")
+CORE_PROBES = ("pypdf", "lumina.configuration", "lumina.agent.runtime", "lumina.cross_validation", "tiktoken", "tomlkit")
 # Published marker API (https://pypi.org/project/marker-pdf/): create_model_dict lives in
 # marker.models and text_from_rendered in marker.output, not on PdfConverter. Import only;
 # calling create_model_dict() would download and load model weights.

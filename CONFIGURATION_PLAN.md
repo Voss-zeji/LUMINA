@@ -102,3 +102,116 @@ via `PIP_INDEX_URL`, without modifying global pip settings.
 The independent review confirmed UID-based PDF provenance, fallback routing,
 empty-page rejection, configuration fingerprints, and isolated pip targeting.
 Its remaining first-use model-download timing note is now in both READMEs.
+
+## Interactive terminal follow-up (approved 2026-10-13)
+
+Base main: `5a5e591`. Branch: `feat/interactive-cli`.
+
+One Python 3.12 launcher prepares/reuses the selected venv, shows an ASCII welcome,
+and guides study setup in Chinese/English (Chinese default). New/edit/resume are
+separate actions. Stage settings are completed before execution and saved in the
+existing four study files. PDF directory selection, exclusions, prompt preview and
+editor, displayed defaults, back navigation and draft save are required.
+
+Budgets may be omitted independently (no corresponding total cap); prices may be
+unknown, never zero by implication. Default verification threshold is 1 and consensus
+is a strict model majority for new studies; existing values remain unchanged.
+Requests retain finite timeout/output bounds, receipted accounting, a three-attempt
+ceiling, self-exclusion and explicit trial-to-batch approval. No native-PDF API path.
+
+| Goal | Acceptance | Evidence |
+|---|---|---|
+| I1 Launcher and wizard | Reuse install.py; healthy environments do not reinstall; bilingual grouped setup, defaults, draft/edit/resume | Passed focused tests and actual Windows terminal demonstration; Marker/fallback profile verified |
+| I2 Optional budgets and quotes | None-safe caps/costs, model request bounds independent of prices, finite old caps preserved | Passed optional/legacy budget, quote, and two-model/two-paper/two-round trial/batch/resume tests |
+| I3 Runtime feedback | Honest phase/round counts, waits, cached requests, round artifacts, no JSON protocol or deadline regression | Passed read-only progress, slow observer, large child receipt, repeated real runtime wait and round artifact tests |
+| I4 Full logging | Redacted setup/input provenance/request/response/use/error/output records; linked startup log | Passed nested secret redaction, private draft and setup-log linking tests |
+| I5 Delivery | Offline Windows/Ubuntu checks, terminal demonstration, bilingual documentation and review | Passed: 485 tests and Ruff on each platform; [CI 38328836225](https://github.com/Voss-zeji/LUMINA/actions/runs/38328836225), code revision `d993785` |
+
+Generic quotes are public JSON URLs or JSON files with a `quotes` array. Each row
+contains `base_url`, `model`, `currency`, `input_per_million`, `output_per_million`,
+and `as_of`. Only exact endpoint/model matches are eligible; imports require preview
+and confirmation. Capture source/fetch time; do not convert currencies or infer proxy
+prices from an upstream vendor. Missing/unrecognized prices can remain unknown. A
+money cap requires complete, comparable pricing.
+
+New model fields `max_input_tokens` (optional) and `max_output_tokens` (default 4096,
+embedding default 0) define request limits independently of prices. Explicit legacy
+pricing bounds remain authoritative for legacy configurations. Unset input limits use
+a conservative byte-based request reservation; unset total limits are represented as
+null in the resolved snapshot, never Infinity. New study files may omit budget/rate
+fields; legacy full configurations remain accepted.
+
+Implementation ownership: parent owns launcher, wizard, quote import, install/deps,
+documentation and integration; budget worker owns budget/contracts/runtime/config
+and its tests; progress worker owns controller/worker/report/progress and its tests.
+Workers coordinate shared interfaces rather than editing each other's files.
+
+
+Current integration evidence (2026-10-13):
+- 47 focused UI/install/quote tests passed, including silent-install heartbeat,
+  Ctrl-C child cleanup, hidden keys, private draft exit, TOML round-trip and quote rejection.
+- Actual Windows PTY used `start.py --venv .venv --lang en --config <synthetic-study>`:
+  healthy venv skipped pip installation; ASCII welcome and grouped study defaults
+  appeared; draft exit saved to `runs/_setup/`. A second launch without `--lang`
+  remembered English. No real API call or OCR weight download occurred.
+- Added end-to-end coverage for omitted caps/prices and retained legacy token bounds.
+- Local full regression passed. GitHub Ubuntu/Windows results are recorded in the final acceptance below.
+
+Independent review fixes: structured auth-field redaction, Marker-aware startup health
+with persistent explicit fallback, malformed pricing rejection, and real wait-event
+producer/renderer pairing. Legacy quotes may retain their common implicit monetary
+unit for compatibility; explicit mixed currencies are rejected, and imports require
+currency plus endpoint binding. Known rates still require a price basis.
+
+A second actual Windows PTY demonstration used the custom `pdf-install-smoke` venv
+with Marker installed and Chinese UI. Imports passed, installation was skipped,
+ASCII/group defaults appeared and draft exit succeeded. No OCR weights or real
+research requests were started.
+
+Post-review display correction: phase/resume stage detection now uses event order,
+and cache counts are bounded by the current stage/round invocation. A same-scope
+trial-to-batch/resume regression verifies that old cache events cannot inflate the
+new display. The 22 progress/controller/configuration tests passed (67.268 s).
+Delivery PR: https://github.com/Voss-zeji/LUMINA/pull/8 (cross-platform checks passed).
+
+Final terminal execution evidence: a network-blocked mock run in a short Windows
+output directory completed the six stages, paused for explicit trial approval,
+then completed the batch with zero new requests (11 total mock requests, 145 tokens,
+2 accepted rows). Unknown prices remained a null total. A first attempt under the
+deep checkout encountered Windows' path-length limit; the bilingual READMEs now
+recommend a short results root when long-path support is disabled. Display paths
+are condensed to output directories; previews omit internal candidate IDs, with
+complete data retained in result files. Seven final progress tests and Ruff passed.
+
+Final Ubuntu/Windows acceptance evidence is maintained in PR #8's Checks and
+validation section. Merge is contingent on both platform checks passing.
+
+Unchanged-edit regression: pressing Enter throughout an existing study must preserve
+its exact frozen fingerprint, including integer/float representations. This test
+first reproduced a drift from numeric coercion, then passed after preserving original
+numeric values and untouched rates. All 25 wizard/quote/optional-budget tests passed.
+
+Cross-platform issue found by CI run 38327688949: Ubuntu passed all 484 tests;
+English Windows ran all 484 and reported six launcher UnicodeEncodeError failures
+because redirected stdout used cp1252. The product now configures UTF-8 output at
+the launcher, wizard and study boundaries, and its probes explicitly use UTF-8.
+A subprocess regression reproduces cp1252 without changing CI locale. All 37
+launcher/wizard/configuration/study tests passed under forced cp1252 (64.054 s).
+Final cross-platform rerun is linked from PR #8.
+
+## Final interactive CLI acceptance
+
+All I1-I5 acceptance goals passed. Verified code: `d993785d22bd5ab128c390cc87d40f94a97e7e8e`.
+[GitHub Actions run 38328836225](https://github.com/Voss-zeji/LUMINA/actions/runs/38328836225)
+completed successfully on both platforms:
+
+- Ubuntu: 485 tests passed in 155.828 s; Ruff passed.
+- Windows: 485 tests passed in 493.948 s; Ruff passed.
+- Local Windows with forced cp1252: 485 tests passed in 224.005 s.
+- Actual terminal: custom Marker venv, bilingual welcome/defaults, language memory,
+  draft exit, and offline trial/approval/batch/resume demonstrated.
+- No real scientific API calls or OCR model-weight downloads were performed.
+
+The final acceptance-record commit changes only this Markdown file; the delivered
+program and tests are byte-for-byte identical to the cross-platform-tested revision.
+Review and merge record: [PR #8](https://github.com/Voss-zeji/LUMINA/pull/8).

@@ -110,16 +110,35 @@ def _status_list(statuses) -> str:
 
 
 def _pricing_for(spec: dict, model: str) -> dict:
-    """Frozen rates and token bounds for a model, validated like contracts.py."""
+    """Return a frozen pricing row; an absent row is an unknown quote."""
     pricing = spec.get("pricing") if isinstance(spec, dict) else None
-    if not isinstance(pricing, dict) or not isinstance(pricing.get(model), dict):
-        raise BudgetExceeded(f"no frozen pricing for model {model}")
-    entry = pricing[model]
+    entry = pricing.get(model, {}) if isinstance(pricing, dict) else {}
+    if not isinstance(entry, dict):
+        raise BudgetExceeded(f"pricing for {model} must be an object")
     for field in ("input_per_million", "output_per_million"):
-        _rate(entry.get(field), f"pricing {model}.{field}")
+        if entry.get(field) is not None:
+            _rate(entry[field], f"pricing {model}.{field}")
     for field in ("max_input_tokens", "max_output_tokens"):
-        _count(entry.get(field), f"pricing {model}.{field}")
+        if entry.get(field) is not None:
+            _count(entry[field], f"pricing {model}.{field}")
     return entry
+
+
+def _limits_for(spec: dict, model: str, price: dict) -> tuple[int | None, int | None]:
+    """Return input/output reservation bounds from the frozen request or legacy row."""
+    limits = spec.get("request_limits") if isinstance(spec, dict) else None
+    if isinstance(limits, dict) and isinstance(limits.get(model), dict):
+        row = limits[model]
+        return row.get("max_input_tokens"), row.get("max_output_tokens")
+    return price.get("max_input_tokens"), price.get("max_output_tokens")
+
+
+def _priced(price: dict) -> bool:
+    return price.get("input_per_million") is not None and price.get("output_per_million") is not None
+
+
+def _zero_cost(row) -> float | None:
+    return 0.0 if row["reserved_cost"] is not None else None
 
 
 def _receipt_of(row) -> dict:
@@ -181,7 +200,8 @@ def _totals(conn) -> dict:
         " FROM attempts").fetchall()
     known_tokens = held_tokens = 0
     known_cost = held_cost = 0.0
-    calls = attempts = imports = unknown_usage = unknown_requests = 0
+    calls = attempts = imports = unknown_usage = unknown_requests = unpriced_requests = 0
+    cost_complete = True
     for row in rows:
         attempts += 1
         status = row["status"]
@@ -193,6 +213,10 @@ def _totals(conn) -> dict:
             # would invent cost out of a source run that is already closed.
             imports += 1
             continue
+        if row["reserved_cost"] is None:
+            unpriced_requests += 1
+        if row["actual_cost"] is None:
+            cost_complete = False
         if _dispatched(receipt):
             calls += 1
         if status == "rejected":
@@ -219,7 +243,9 @@ def _totals(conn) -> dict:
         "attempts": attempts, "calls": calls, "known_tokens": known_tokens,
         "held_tokens": held_tokens, "known_cost": known_cost, "held_cost": held_cost,
         "unknown_usage": unknown_usage, "unknown_requests": unknown_requests,
-        "imports": imports,
+        "imports": imports, "unpriced_requests": unpriced_requests,
+        "cost_complete": cost_complete,
+        "total_cost": known_cost + held_cost if cost_complete else None,
     }
 
 
@@ -231,19 +257,22 @@ class Budget:
         if not isinstance(budget, dict):
             raise BudgetError("specification carries no budget")
         for field in ("max_calls", "max_tokens"):
-            _count(budget.get(field), f"budget.{field}", strict=True)
+            value = budget.get(field)
+            if value is not None:
+                _count(value, f"budget.{field}", strict=True)
         for field in ("max_cost", "max_runtime"):
             value = budget.get(field)
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-                raise BudgetError(f"budget.{field} must be a finite number")
-            if value <= 0:
-                raise BudgetError(f"budget.{field} must be positive")
+            if value is not None:
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                    raise BudgetError(f"budget.{field} must be a finite number")
+                if value <= 0:
+                    raise BudgetError(f"budget.{field} must be positive")
         self.store = store
         self.spec = spec
         self.budget = {**budget,
-                       "max_calls": budget["max_calls"], "max_tokens": budget["max_tokens"],
-                       "max_cost": float(budget["max_cost"]),
-                       "max_runtime": float(budget["max_runtime"])}
+                       "max_calls": budget.get("max_calls"), "max_tokens": budget.get("max_tokens"),
+                       "max_cost": None if budget.get("max_cost") is None else float(budget["max_cost"]),
+                       "max_runtime": None if budget.get("max_runtime") is None else float(budget["max_runtime"])}
 
     # -- internal helpers -------------------------------------------------
 
@@ -275,7 +304,7 @@ class Budget:
         return None
 
     def _enforce(self, conn, extra_calls: int = 0, extra_tokens: int = 0,
-                 extra_cost: float = 0.0, attempt_id: str = None) -> dict:
+                 extra_cost: float = 0.0, attempt_id: str | None = None) -> dict:
         """Check the four frozen limits against the ledger plus a pending delta.
 
         An undispatched reservation still occupies a max_calls slot, so two
@@ -288,19 +317,19 @@ class Budget:
         pending_tokens = totals["known_tokens"] + totals["held_tokens"]
         pending_cost = totals["known_cost"] + totals["held_cost"]
         where = f" for attempt {attempt_id}" if attempt_id else ""
-        if pending_calls + extra_calls > self.budget["max_calls"]:
+        if self.budget["max_calls"] is not None and pending_calls + extra_calls > self.budget["max_calls"]:
             raise BudgetExceeded(
                 f"max_calls {self.budget['max_calls']} reached{where}: "
                 f"{pending_calls} counted + {extra_calls} requested")
-        if pending_tokens + extra_tokens > self.budget["max_tokens"]:
+        if self.budget["max_tokens"] is not None and pending_tokens + extra_tokens > self.budget["max_tokens"]:
             raise BudgetExceeded(
                 f"max_tokens {self.budget['max_tokens']} reached{where}: "
                 f"{pending_tokens} counted + {extra_tokens} requested")
-        if pending_cost + extra_cost > math.nextafter(self.budget["max_cost"], math.inf):
+        if self.budget["max_cost"] is not None and extra_cost is not None and pending_cost + extra_cost > math.nextafter(self.budget["max_cost"], math.inf):
             raise BudgetExceeded(
                 f"max_cost {self.budget['max_cost']} reached{where}: "
                 f"{pending_cost} counted + {extra_cost} requested")
-        if runtime > self.budget["max_runtime"]:
+        if self.budget["max_runtime"] is not None and runtime > self.budget["max_runtime"]:
             raise BudgetExceeded(
                 f"max_runtime {self.budget['max_runtime']}s exceeded{where}: {runtime:.1f}s used")
         return totals
@@ -344,19 +373,26 @@ class Budget:
         requested_in = _count(input_tokens, "input_tokens")
         requested_out = _count(output_tokens, "output_tokens")
         price = _pricing_for(self.spec, model)
+        input_limit, output_limit = _limits_for(self.spec, model, price)
         # The frozen bounds are the most the provider may charge.  A request
         # above them is refused rather than quietly reserved at a larger size.
-        if requested_in > price["max_input_tokens"]:
+        if input_limit is not None and requested_in > input_limit:
             raise BudgetExceeded(
                 f"input_tokens {requested_in} exceeds the frozen max_input_tokens "
-                f"{price['max_input_tokens']} for {model}")
-        if requested_out > price["max_output_tokens"]:
+                f"{input_limit} for {model}")
+        if output_limit is not None and requested_out > output_limit:
             raise BudgetExceeded(
                 f"output_tokens {requested_out} exceeds the frozen max_output_tokens "
-                f"{price['max_output_tokens']} for {model}")
-        reserved_tokens = price["max_input_tokens"] + price["max_output_tokens"]
-        reserved_cost = (price["max_input_tokens"] * price["input_per_million"]
-                         + price["max_output_tokens"] * price["output_per_million"]) / 1000000.0
+                f"{output_limit} for {model}")
+        reserved_in = input_limit if input_limit is not None else requested_in
+        reserved_out = output_limit if output_limit is not None else requested_out
+        reserved_tokens = reserved_in + reserved_out
+        reserved_cost = ((reserved_in * price["input_per_million"]
+                          + reserved_out * price["output_per_million"]) / 1000000.0
+                         if _priced(price) else None)
+        if self.budget["max_cost"] is not None and reserved_cost is None:
+            raise BudgetExceeded(
+                f"max_cost requires complete comparable pricing before reserving {model}")
         attempt_id = uuid.uuid4().hex
         with self.store.transaction() as conn:
             prior = conn.execute(
@@ -438,8 +474,9 @@ class Budget:
             actual_tokens = actual_cost = None
             if known is not None:
                 actual_tokens = known[0] + known[1]
-                actual_cost = (known[0] * price["input_per_million"]
-                               + known[1] * price["output_per_million"]) / 1000000.0
+                if _priced(price):
+                    actual_cost = (known[0] * price["input_per_million"]
+                                   + known[1] * price["output_per_million"]) / 1000000.0
             receipt.update({"response": response, "response_hash": _fingerprint(response),
                             "usage": usage, "received_at": time.time()})
             self._write(conn, attempt_id, time.time(), status="received",
@@ -450,7 +487,8 @@ class Budget:
                                "actual_cost": actual_cost, "unknown_usage": known is None})
             over_reservation = bool(actual_tokens is not None and (
                 actual_tokens > row["reserved_tokens"]
-                or actual_cost > math.nextafter(row["reserved_cost"] or 0.0, math.inf)))
+                or (actual_cost is not None and row["reserved_cost"] is not None
+                    and actual_cost > math.nextafter(row["reserved_cost"], math.inf))))
             over_budget = False
             if not over_reservation:
                 # Totals already include this settlement, so ask with no delta.
@@ -498,7 +536,7 @@ class Budget:
                     raise StoreError(f"cannot reject an attempt in status {row['status']}")
                 receipt["confirmed_not_executed"] = True
                 self._write(conn, attempt_id, now, status="rejected",
-                            actual_tokens=0, actual_cost=0.0, receipt=self._encode(receipt))
+                            actual_tokens=0, actual_cost=_zero_cost(row), receipt=self._encode(receipt))
             else:
                 if row["status"] != "dispatched":
                     raise StoreError(f"cannot fail an attempt in status {row['status']}")
@@ -535,7 +573,7 @@ class Budget:
         with self.store.transaction() as conn:
             now = time.time()
             rows = conn.execute(
-                "SELECT attempt_id, status, receipt FROM attempts"
+                "SELECT attempt_id, status, reserved_cost, receipt FROM attempts"
                 " WHERE status IN ('dispatched', 'reserved')").fetchall()
             for row in rows:
                 receipt = _receipt_of(row)
@@ -552,7 +590,7 @@ class Budget:
                     # committed, so this request provably never left the process.
                     receipt["released_at"] = now
                     self._write(conn, row["attempt_id"], now, status="rejected",
-                                actual_tokens=0, actual_cost=0.0, receipt=self._encode(receipt))
+                                actual_tokens=0, actual_cost=_zero_cost(row), receipt=self._encode(receipt))
                     self._record_event(conn, "budget_released",
                                        {"attempt_id": row["attempt_id"],
                                         "reason": "never dispatched"})
@@ -571,9 +609,12 @@ class Budget:
     def over_budget(self) -> bool:
         """True when the ledger already exceeds a frozen limit or is stopped."""
         totals = self.totals()
-        return (totals["calls"] + totals["open_slots"] > self.budget["max_calls"]
-                or totals["known_tokens"] + totals["held_tokens"] > self.budget["max_tokens"]
-                or totals["known_cost"] + totals["held_cost"] > math.nextafter(self.budget["max_cost"], math.inf)
+        return ((self.budget["max_calls"] is not None
+                 and totals["calls"] + totals["open_slots"] > self.budget["max_calls"])
+                or (self.budget["max_tokens"] is not None
+                    and totals["known_tokens"] + totals["held_tokens"] > self.budget["max_tokens"])
+                or (self.budget["max_cost"] is not None
+                    and totals["known_cost"] + totals["held_cost"] > math.nextafter(self.budget["max_cost"], math.inf))
                 or totals["stop_reason"] is not None)
 
     def reconcile(self, attempt_id: str, outcome: str, reason: str, usage=None) -> dict:
@@ -599,7 +640,7 @@ class Budget:
                                      "usage": usage}
             if outcome == "not_executed":
                 self._write(conn, attempt_id, now, status="rejected",
-                            actual_tokens=0, actual_cost=0.0, receipt=self._encode(receipt))
+                            actual_tokens=0, actual_cost=_zero_cost(row), receipt=self._encode(receipt))
             else:
                 # The hold stays; a known usage settles tokens but keeps money held.
                 self._write(conn, attempt_id, now, status="unknown",

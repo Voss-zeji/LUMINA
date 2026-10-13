@@ -44,9 +44,10 @@ def load_config(config_path: str):
         raise ValueError('Configuration must be project.toml or a legacy .py file')
     raw = _read(path)
     sections = {'project', 'selected_models', 'models', 'providers', 'embedding', 'run', 'budget', 'pricing'}
-    _table(raw, sections | {'pdf'}, sections, 'project file')
+    required_sections = sections - {'budget', 'pricing'}
+    _table(raw, sections | {'pdf'}, required_sections, 'project file')
     fields = {'domain', 'domain_knowledge', 'run_id', 'runs_dir', 'papers', 'questions', 'secrets',
-              'rounds', 'smoke_size', 'stage', 'allow_pdf_resources'}
+              'rounds', 'smoke_size', 'stage', 'allow_pdf_resources', 'language'}
     project = _table(raw['project'], fields, {'domain', 'domain_knowledge', 'run_id', 'runs_dir'}, 'project')
     domain = _text(project['domain'], 'project.domain')
     knowledge = _text(project['domain_knowledge'], 'project.domain_knowledge')
@@ -57,6 +58,9 @@ def load_config(config_path: str):
     stage = project.get('stage', 'all')
     if not isinstance(stage, str) or stage not in STAGES:
         raise ValueError(f'project.stage must be one of {sorted(STAGES)}')
+    language = project.get('language', 'zh')
+    if not isinstance(language, str) or language not in {'zh', 'en'}:
+        raise ValueError('project.language must be zh or en')
 
     def relative(value, label):
         return (path.parent / _text(value, label)).resolve()
@@ -84,27 +88,38 @@ def load_config(config_path: str):
     if not isinstance(models, dict) or not models:
         raise ValueError('models must be a nonempty table')
     for alias, model in models.items():
-        _table(model, {'model', 'source', 'limit_token', 'timeout_seconds', 'rate_limit_seconds'},
+        _table(model, {'model', 'source', 'limit_token', 'timeout_seconds', 'rate_limit_seconds',
+                       'max_input_tokens', 'max_output_tokens'},
                {'model', 'source'}, f'models.{alias}')
         _text(model['model'], 'model ID')
     selected = raw['selected_models']
     if not isinstance(selected, list) or not selected or any(not isinstance(k, str) for k in selected):
         raise ValueError('selected_models must be a nonempty string list')
-    embedding = _table(raw['embedding'], {'model', 'source', 'url', 'timeout_seconds', 'rate_limit_seconds'},
+    embedding = _table(raw['embedding'], {'model', 'source', 'url', 'timeout_seconds', 'rate_limit_seconds',
+                                          'max_input_tokens', 'max_output_tokens'},
                        {'model', 'source', 'url'}, 'embedding')
     _text(embedding['model'], 'embedding.model')
     run = raw['run']
     if not isinstance(run, dict):
         raise ValueError('run must be a table')
+    raw_budget = raw.get('budget', {})
+    if raw_budget is None:
+        raw_budget = {}
+    if not isinstance(raw_budget, dict):
+        raise ValueError('budget must be a table when present')
     request = dict(domain=domain, papers=papers, rounds=project.get('rounds', [run.get('round_index')]),
-                   smoke_size=project.get('smoke_size', 1), budget=raw['budget'], pricing=raw['pricing'],
+                   smoke_size=project.get('smoke_size', 1),
+                   budget={field: raw_budget.get(field) for field in
+                           ('max_calls', 'max_tokens', 'max_cost', 'max_runtime')},
+                   pricing=raw.get('pricing', {}),
                    allow_pdf_resources=project.get('allow_pdf_resources', False), advisor=None)
     from .preparation import pdf_options
     cfg = dict(domain_knowledge=knowledge, questions=list(range(1, len(question_set['questions']) + 1)),
                question_set=question_set, pdf=pdf_options(raw.get('pdf')))
     config = SimpleNamespace(DOMAINS={domain: cfg}, FULL_LLM_POOL=models, SELECTED_KEYS=selected,
                              LLM_SETTINGS=settings, EMBEDDING_MODEL=embedding, RUN=run, REQUEST=request,
-                             PROJECT=dict(run_id=run_id, runs_dir=str(runs_dir), stage=stage))
+                             PROJECT=dict(run_id=run_id, runs_dir=str(runs_dir), stage=stage,
+                                          language=language))
     # Reuse the pipeline's authority for paper identity, prices, budgets and model validation.
     ResearchSpecification.from_config(request, config)
     return config
