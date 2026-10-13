@@ -173,3 +173,15 @@ and cache counts are bounded by the current stage/round invocation. A same-scope
 trial-to-batch/resume regression verifies that old cache events cannot inflate the
 new display. The 22 progress/controller/configuration tests passed (67.268 s).
 Delivery PR: https://github.com/Voss-zeji/LUMINA/pull/8 (cross-platform checks pending).
+
+Final terminal execution evidence: a network-blocked mock run in a short Windows
+output directory completed the six stages, paused for explicit trial approval,
+then completed the batch with zero new requests (11 total mock requests, 145 tokens,
+2 accepted rows). Unknown prices remained a null total. A first attempt under the
+deep checkout encountered Windows' path-length limit; the bilingual READMEs now
+recommend a short results root when long-path support is disabled. Display paths
+are condensed to output directories; previews omit internal candidate IDs, with
+complete data retained in result files. Seven final progress tests and Ruff passed.
+
+Final Ubuntu/Windows acceptance evidence is maintained in PR #8's Checks and
+validation section. Merge is contingent on both platform checks passing.

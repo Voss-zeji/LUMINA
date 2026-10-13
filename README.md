@@ -163,6 +163,8 @@ Copy-Item configs/my-study/secrets.example.toml configs/my-study/secrets.local.t
 | `questions.toml` | All prompts, question definitions, text/numeric types, item and unit rules |
 | `secrets.local.toml` | API keys; excluded from Git |
 
+On Windows without long-path support, choose a short results root such as `D:/lumina-runs`; candidate and checkpoint filenames can exceed the system limit under deeply nested directories.
+
 Relative paths resolve from the configuration directory. Replace placeholders with your actual settings, including prices when known; unknown rates can be omitted. Execution reads TOML with standard-library `tomllib`; the wizard uses TOML Kit to preserve comments when saving.
 
 PDF conversion is configured in `project.toml`:

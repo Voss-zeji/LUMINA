@@ -163,6 +163,8 @@ cp configs/my-study/secrets.example.toml configs/my-study/secrets.local.toml
 | `questions.toml` | 全部提示词、问题列表、文本／数值类型、字段与单位要求 |
 | `secrets.local.toml` | API 密钥；此文件被 Git 忽略 |
 
+Windows 未启用长路径支持时，请选择较短的结果根目录（例如 `D:/lumina-runs`），避免候选文件和检查点的完整路径超过系统限制。
+
 所有相对路径以配置目录为基准。示例中的占位内容必须替换为真实设置；模型价格不能猜测。运行配置读取使用标准库 `tomllib`；向导写回使用 TOML Kit 保留注释。未知价格可省略对应资费项。
 
 PDF 转换设置也在 `project.toml` 中：

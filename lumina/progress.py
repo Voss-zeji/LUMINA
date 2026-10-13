@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import sqlite3
 import sys
 import time
@@ -411,12 +412,22 @@ def _stage_label(stage, language):
               "composite": ("候选合并", "candidate merge"),
               "embeddings": ("证据索引", "evidence indexing"),
               "cross": ("交叉核验", "cross-verification"),
-              "ensemble": ("共识确认", "consensus")}
+              "ensemble": ("共识确认", "consensus"),
+              "INPUT_READY": ("输入已准备", "inputs ready"),
+              "HUMAN_GATE_SMOKE": ("试跑待确认", "trial review"),
+              "DONE": ("已完成", "completed"),
+              "PAUSED": ("已暂停", "paused")}
     return _label(language, *labels[stage]) if stage in labels else stage
 
 
 def _money(value):
     return "?" if value is None else f"{value:.6g}"
+
+
+def _output_location(paths):
+    if len(paths) == 1:
+        return paths[0]
+    return os.path.commonpath([str(Path(path).parent) for path in paths]) if paths else ""
 
 
 def _round_value(value):
@@ -522,9 +533,14 @@ def format_round_summary(snapshot: dict, round_index: int | None = None, *, lang
                                                 else _label(language, "接受行未知", "accepted rows=unknown"))
             previews = data.get("previews", []) if isinstance(data, dict) else []
             if previews:
-                line += f" [{'; '.join(json.dumps(p, ensure_ascii=False, default=str) for p in previews[:5])}]"
+                fields = ('paper_index', 'question_index', 'item', 'ensemble_value', 'unit', 'experimental', 'support', 'n_models')
+                brief = [{k: (v[:120] + '…' if isinstance(v, str) and len(v) > 120 else v)
+                          for k, v in row.items() if k in fields and v is not None} for row in previews[:5]]
+                line += f" [{'; '.join(json.dumps(p, ensure_ascii=False, default=str) for p in brief)}]"
         if paths:
-            line += _label(language, " | 路径 " + ", ".join(paths), " | paths " + ", ".join(paths))
+            results = [path for path in paths if "ensemble" in Path(path).parts] or paths
+            location = _output_location(results)
+            line += _label(language, " | 结果 " + location, " | results " + location)
         lines.append(line)
     return "\n".join(lines)
 
@@ -541,7 +557,8 @@ def format_stage_summary(event: dict, *, language="en") -> str:
     prefix = _label(language, "阶段完成", "stage finished")
     result = f"{prefix} {stage}{round_text}"
     if paths:
-        result += _label(language, " | 路径 " + ", ".join(paths), " | paths " + ", ".join(paths))
+        location = _output_location(paths)
+        result += _label(language, " | 输出 " + location, " | output " + location)
     return result
 
 
