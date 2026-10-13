@@ -76,6 +76,8 @@ class WizardTests(unittest.TestCase):
     def test_edit_retains_comments_existing_values_and_hidden_credentials(self):
         self.path.write_text('# USER NOTE retain me\n' + self.path.read_text(encoding='utf-8'), encoding='utf-8')
         before = tomllib.loads(self.path.read_text(encoding='utf-8'))
+        from lumina.study import preflight
+        original_fingerprint = preflight(wizard.load_config(str(self.path))).fingerprint
         def answer(prompt):
             if prompt.startswith('1 save / 2 validate'):
                 return '1'
@@ -92,6 +94,7 @@ class WizardTests(unittest.TestCase):
         self.assertEqual(before['pricing'], after['pricing'])
         self.assertEqual(before['models'], after['models'])
         self.assertEqual(before['selected_models'], after['selected_models'])
+        self.assertEqual(preflight(wizard.load_config(str(self.path))).fingerprint, original_fingerprint)
         self.assertIn('# USER NOTE retain me', self.path.read_text(encoding='utf-8'))
         self.assertNotIn('SECRET-DO-NOT-PERSIST', output.getvalue())
         self.assertNotIn('SECRET-DO-NOT-PERSIST', (self.setup / 'events.jsonl').read_text(encoding='utf-8'))

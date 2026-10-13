@@ -185,3 +185,8 @@ complete data retained in result files. Seven final progress tests and Ruff pass
 
 Final Ubuntu/Windows acceptance evidence is maintained in PR #8's Checks and
 validation section. Merge is contingent on both platform checks passing.
+
+Unchanged-edit regression: pressing Enter throughout an existing study must preserve
+its exact frozen fingerprint, including integer/float representations. This test
+first reproduced a drift from numeric coercion, then passed after preserving original
+numeric values and untouched rates. All 25 wizard/quote/optional-budget tests passed.

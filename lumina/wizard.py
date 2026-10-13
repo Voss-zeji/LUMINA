@@ -78,7 +78,9 @@ class Console:
                 number = int(raw) if integer else float(raw)
                 if not math.isfinite(number) or number < minimum or (positive and number == minimum):
                     raise ValueError
-                return number
+                # Enter must preserve an existing integer versus float too:
+                # both look equivalent, but frozen JSON fingerprints distinguish them.
+                return default(value) if raw == str(default(value)) else number
             except ValueError:
                 self.say('请输入有效范围内的数字。', 'Enter a number within the allowed range.')
 
@@ -421,7 +423,7 @@ def costs_group(ui: Console, draft: StudyDraft):
                     price.pop(field, None)
                 price['source'] = 'manual'
                 price['base_url'] = expected[model]
-            price['input_per_million'], price['output_per_million'] = values
+                price['input_per_million'], price['output_per_million'] = values
             currency = ui.ask('币种（如 USD/CNY，可空）', 'Currency (USD/CNY, optional)', price.get('currency', ''))
             if currency.upper() != price.get('currency', ''):
                 for field in ('as_of', 'fetched_at', 'basis'):
