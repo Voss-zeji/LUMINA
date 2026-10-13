@@ -125,7 +125,7 @@ ceiling, self-exclusion and explicit trial-to-batch approval. No native-PDF API 
 | I2 Optional budgets and quotes | None-safe caps/costs, model request bounds independent of prices, finite old caps preserved | Passed optional/legacy budget, quote, and two-model/two-paper/two-round trial/batch/resume tests |
 | I3 Runtime feedback | Honest phase/round counts, waits, cached requests, round artifacts, no JSON protocol or deadline regression | Passed read-only progress, slow observer, large child receipt, repeated real runtime wait and round artifact tests |
 | I4 Full logging | Redacted setup/input provenance/request/response/use/error/output records; linked startup log | Passed nested secret redaction, private draft and setup-log linking tests |
-| I5 Delivery | Offline Windows/Ubuntu checks, terminal demonstration, bilingual documentation and review | Local 482 tests passed (204.595 s); final wait fix passed 28 related tests; GitHub cross-platform checks pending |
+| I5 Delivery | Offline Windows/Ubuntu checks, terminal demonstration, bilingual documentation and review | Passed: 485 tests and Ruff on each platform; [CI 38328836225](https://github.com/Voss-zeji/LUMINA/actions/runs/38328836225), code revision `d993785` |
 
 Generic quotes are public JSON URLs or JSON files with a `quotes` array. Each row
 contains `base_url`, `model`, `currency`, `input_per_million`, `output_per_million`,
@@ -155,7 +155,7 @@ Current integration evidence (2026-10-13):
   appeared; draft exit saved to `runs/_setup/`. A second launch without `--lang`
   remembered English. No real API call or OCR weight download occurred.
 - Added end-to-end coverage for omitted caps/prices and retained legacy token bounds.
-- Local full regression passed. GitHub Ubuntu/Windows checks are pending on the submitted revision.
+- Local full regression passed. GitHub Ubuntu/Windows results are recorded in the final acceptance below.
 
 Independent review fixes: structured auth-field redaction, Marker-aware startup health
 with persistent explicit fallback, malformed pricing rejection, and real wait-event
@@ -172,7 +172,7 @@ Post-review display correction: phase/resume stage detection now uses event orde
 and cache counts are bounded by the current stage/round invocation. A same-scope
 trial-to-batch/resume regression verifies that old cache events cannot inflate the
 new display. The 22 progress/controller/configuration tests passed (67.268 s).
-Delivery PR: https://github.com/Voss-zeji/LUMINA/pull/8 (cross-platform checks pending).
+Delivery PR: https://github.com/Voss-zeji/LUMINA/pull/8 (cross-platform checks passed).
 
 Final terminal execution evidence: a network-blocked mock run in a short Windows
 output directory completed the six stages, paused for explicit trial approval,
@@ -198,3 +198,20 @@ the launcher, wizard and study boundaries, and its probes explicitly use UTF-8.
 A subprocess regression reproduces cp1252 without changing CI locale. All 37
 launcher/wizard/configuration/study tests passed under forced cp1252 (64.054 s).
 Final cross-platform rerun is linked from PR #8.
+
+## Final interactive CLI acceptance
+
+All I1-I5 acceptance goals passed. Verified code: `d993785d22bd5ab128c390cc87d40f94a97e7e8e`.
+[GitHub Actions run 38328836225](https://github.com/Voss-zeji/LUMINA/actions/runs/38328836225)
+completed successfully on both platforms:
+
+- Ubuntu: 485 tests passed in 155.828 s; Ruff passed.
+- Windows: 485 tests passed in 493.948 s; Ruff passed.
+- Local Windows with forced cp1252: 485 tests passed in 224.005 s.
+- Actual terminal: custom Marker venv, bilingual welcome/defaults, language memory,
+  draft exit, and offline trial/approval/batch/resume demonstrated.
+- No real scientific API calls or OCR model-weight downloads were performed.
+
+The final acceptance-record commit changes only this Markdown file; the delivered
+program and tests are byte-for-byte identical to the cross-platform-tested revision.
+Review and merge record: [PR #8](https://github.com/Voss-zeji/LUMINA/pull/8).
