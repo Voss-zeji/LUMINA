@@ -4,9 +4,18 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def configure_console():
+    """Keep bilingual output readable in Windows consoles and redirected logs."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, 'reconfigure', None)
+        if callable(reconfigure):
+            reconfigure(encoding='utf-8', errors='backslashreplace')
 
 
 def redact(value, secrets=()):

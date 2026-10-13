@@ -11,7 +11,7 @@ from .agent.controller import approve, begin
 from .agent.store import Store
 from .agent.worker import supervise
 from .common import error_details
-from .ui_support import atomic_text, redact
+from .ui_support import atomic_text, configure_console, redact
 
 
 def preflight(config) -> ResearchSpecification:
@@ -80,6 +80,7 @@ def _link_setup(run: Path, directory: Path | None, config) -> None:
 
 def run_study(config_path: str, config, *, check: bool = False, setup_log: Path | None = None) -> int:
     """One command creates or resumes exactly the configured run, never guesses."""
+    configure_console()
     try:
         language = getattr(config, 'PROJECT', {}).get('language', 'en')
         def text(zh, en):

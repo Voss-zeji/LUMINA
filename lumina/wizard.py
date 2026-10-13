@@ -21,7 +21,7 @@ import tomlkit
 from . import prompts
 from .configuration import load_config
 from .pricing import read_quotes
-from .ui_support import SetupLog, atomic_text, read_preferences, redact, save_preferences
+from .ui_support import SetupLog, atomic_text, configure_console, read_preferences, redact, save_preferences
 
 ROOT = Path(__file__).resolve().parents[1]
 BANNER = '''+--------------------------------------------------+
@@ -541,6 +541,7 @@ def configure(ui: Console, draft: StudyDraft) -> int:
 
 
 def main(argv=None) -> int:
+    configure_console()
     parser = argparse.ArgumentParser(description='LUMINA interactive study setup')
     parser.add_argument('--config', type=Path)
     parser.add_argument('--lang', choices=['zh', 'en'])

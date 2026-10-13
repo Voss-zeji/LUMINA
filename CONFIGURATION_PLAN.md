@@ -190,3 +190,11 @@ Unchanged-edit regression: pressing Enter throughout an existing study must pres
 its exact frozen fingerprint, including integer/float representations. This test
 first reproduced a drift from numeric coercion, then passed after preserving original
 numeric values and untouched rates. All 25 wizard/quote/optional-budget tests passed.
+
+Cross-platform issue found by CI run 38327688949: Ubuntu passed all 484 tests;
+English Windows ran all 484 and reported six launcher UnicodeEncodeError failures
+because redirected stdout used cp1252. The product now configures UTF-8 output at
+the launcher, wizard and study boundaries, and its probes explicitly use UTF-8.
+A subprocess regression reproduces cp1252 without changing CI locale. All 37
+launcher/wizard/configuration/study tests passed under forced cp1252 (64.054 s).
+Final cross-platform rerun is linked from PR #8.

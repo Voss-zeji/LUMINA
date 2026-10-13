@@ -14,7 +14,7 @@ import uuid
 from pathlib import Path
 
 import install
-from lumina.ui_support import read_preferences, redact as _shared_redact
+from lumina.ui_support import configure_console, read_preferences, redact as _shared_redact
 
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -206,6 +206,9 @@ def _probe(command: list[object], startup_log: Path) -> subprocess.CompletedProc
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
+        encoding="utf-8",
+        errors="replace",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         shell=False,
     )
     output = getattr(result, "stdout", "")
@@ -306,6 +309,7 @@ def _noninteractive_message(language: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    configure_console()
     args = _parser().parse_args(argv)
     language = _startup_language(args.lang)
     if not _is_tty():

@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 import io
 import json
+import os
 import queue
 from pathlib import Path
 import subprocess
@@ -68,6 +69,14 @@ class InterruptibleProcess(FakeProcess):
 
 
 class StartTests(unittest.TestCase):
+    def test_chinese_startup_is_safe_with_cp1252_redirected_output(self):
+        result = subprocess.run([sys.executable, str(start.REPO_ROOT / 'start.py'), '--lang', 'zh'],
+                                stdin=subprocess.DEVNULL, capture_output=True,
+                                env={**os.environ, 'PYTHONIOENCODING': 'cp1252'}, timeout=20)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn('需要交互式终端', result.stderr.decode('utf-8'))
+        self.assertNotIn(b'UnicodeEncodeError', result.stderr)
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
