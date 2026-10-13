@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import math
 import time
+import uuid
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -68,9 +69,13 @@ class RunContext:
         limits = self.spec["budget"]
         if self.budget.over_budget():
             self._gate("budget", self.run_dir.name, "a durable budget stop forbids automatic resume")
-        if totals["known_tokens"] + totals["held_tokens"] > limits["max_tokens"] or totals["known_cost"] + totals["held_cost"] > math.nextafter(limits["max_cost"], math.inf) or totals["calls"] > limits["max_calls"]:
+        if (limits["max_tokens"] is not None and
+                totals["known_tokens"] + totals["held_tokens"] > limits["max_tokens"] or
+                limits["max_cost"] is not None and
+                totals["known_cost"] + totals["held_cost"] > math.nextafter(limits["max_cost"], math.inf) or
+                limits["max_calls"] is not None and totals["calls"] > limits["max_calls"]):
             self._gate("budget", self.run_dir.name, "recorded usage exceeds frozen budget; automatic resume refused")
-        if totals["runtime"] > limits["max_runtime"]:
+        if limits["max_runtime"] is not None and totals["runtime"] > limits["max_runtime"]:
             self._gate("budget", self.run_dir.name, "max_runtime reached")
 
     def _gate(self, kind: str, target: str, reason: str):
@@ -135,11 +140,22 @@ class RunContext:
         if isinstance(exc, (ControlStop, BudgetExceeded, UnknownRequest, AttemptLimit, KeyboardInterrupt)):
             raise exc
 
-    def sleep(self, seconds: float):
+    def sleep(self, seconds: float, reason="rate_limit"):
+        started = time.time()
+        model = None
+        if self.current is not None:
+            model = self.current.verifier_model or self.current.source_model
+            if not model and self.current.stage in {"embeddings", "evidence_embedding"}:
+                model = self.spec["embedding"]["model"]
+        detail = dict(wait_id=uuid.uuid4().hex, seconds=seconds, reason=reason, kind=reason, model=model)
+        self.store.event("wait_started", detail)
         deadline = time.monotonic() + seconds
-        while time.monotonic() < deadline:
-            self.check(diagnostic=self.current is not None and self.current.stage == "advisor")
-            time.sleep(min(.2, max(0., deadline - time.monotonic())))
+        try:
+            while time.monotonic() < deadline:
+                self.check(diagnostic=self.current is not None and self.current.stage == "advisor")
+                time.sleep(min(.2, max(0., deadline - time.monotonic())))
+        finally:
+            self.store.event("wait_finished", detail | {"elapsed_seconds": time.time() - started})
 
     def redact(self, value):
         if isinstance(value, str):
@@ -166,8 +182,23 @@ class RunContext:
         return match
 
     def _timeout(self, model=None):
-        return max(.01, min((model or {}).get('timeout_seconds', 120.),
-                           self.spec["budget"]["max_runtime"] - self.budget.totals()["runtime"]))
+        timeout = (model or {}).get('timeout_seconds', 120.)
+        maximum = self.spec["budget"].get("max_runtime")
+        if maximum is None:
+            return max(.01, timeout)
+        return max(.01, min(timeout, maximum - self.budget.totals()["runtime"]))
+
+    def _request_limits(self, model: dict, kind: str) -> tuple[int | None, int]:
+        price = self.spec.get("pricing", {}).get(model["model"], {})
+        frozen_limits = self.spec.get("request_limits") or {}
+        limits = frozen_limits.get(model["model"], {}) if isinstance(frozen_limits, dict) else {}
+        if not limits:
+            limits = price
+        input_limit = limits.get("max_input_tokens")
+        output_limit = limits.get("max_output_tokens")
+        if output_limit is None:
+            output_limit = 0 if kind == "embedding" else 4096
+        return input_limit, output_limit
 
     @staticmethod
     def _usage(response: dict, *, embedding=False):
@@ -207,7 +238,9 @@ class RunContext:
             raise RuntimeError("paid requests require a task scope")
         self.check(diagnostic=kind == "advisor")
         key = self.current
-        request_hash = fingerprint(dict(payload=payload, kind=kind, spec=self.spec["pricing"][model["model"]],
+        request_hash = fingerprint(dict(payload=payload, kind=kind,
+                                        spec={"pricing": self.spec.get("pricing", {}).get(model["model"], {}),
+                                              "request_limits": self.spec.get("request_limits", {}).get(model["model"], {})},
                                         endpoint=model["endpoint"], source=model["source"]))
         prior = self.store._conn.execute("SELECT request_hash FROM attempts WHERE task_id=?", (key.task_id,)).fetchall()
         if any(row["request_hash"] != request_hash for row in prior):
@@ -230,11 +263,12 @@ class RunContext:
             self.store.event("response_reused", {"task_id": key.task_id, "source_task_id": source_task_id,
                                                   "attempt_id": attempt_id, "kind": kind})
         else:
-            price = self.spec["pricing"][model["model"]]
+            input_limit, output_limit = self._request_limits(model, kind)
             if kind == 'embedding' and model.get('rate_limit_seconds'):
                 self.sleep(model['rate_limit_seconds'])
             estimated_input = len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) + 128
-            if estimated_input > price["max_input_tokens"]:
+            input_reservation = input_limit if input_limit is not None else estimated_input
+            if input_limit is not None and estimated_input > input_limit:
                 self._gate("input_bound", key.task_id, "request text exceeds approved conservative input bound")
             while True:
                 self.check(diagnostic=kind == "advisor")
@@ -248,7 +282,7 @@ class RunContext:
                         self._gate("phase_violation", key.task_id, "batch has no recorded human approval")
                 try:
                     attempt_id = self.budget.reserve(key.task_id, request_hash, kind, model["model"],
-                                                     price["max_input_tokens"], 0 if kind == "embedding" else price["max_output_tokens"])
+                                                     input_reservation, output_limit)
                     self.budget.dispatch(attempt_id)
                 except (BudgetExceeded, AttemptLimit) as exc:
                     self._gate("budget", key.task_id, str(exc))
@@ -268,7 +302,7 @@ class RunContext:
                         pass  # The unknown receipt is durable; the gate below is mandatory.
                     if rejected == "retry":
                         self.store.event("request_rejected", {"attempt_id": attempt_id, "error": detail})
-                        self.sleep(1.)
+                        self.sleep(1., reason="retry_backoff")
                         continue
                     if rejected == "stop":
                         self._gate("confirmed_rejection", attempt_id, detail + "; request was rejected before execution")
@@ -299,9 +333,9 @@ class RunContext:
             self._validate_extraction_messages(messages)
         match = self._allowed(llm, settings)
         provider = settings[llm["source"]]
-        price = self.spec["pricing"][llm["model"]]
+        _, output_limit = self._request_limits(match, "chat")
         payload = dict(model=llm["model"], messages=messages, temperature=temperature, stream=False,
-                       max_tokens=price["max_output_tokens"])
+                       max_tokens=output_limit)
         if match["supports_json_mode"]:
             payload["response_format"] = {"type": "json_object"}
 

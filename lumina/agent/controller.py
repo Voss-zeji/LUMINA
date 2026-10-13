@@ -17,6 +17,60 @@ from .runtime import ControlStop, RunContext
 from .store import Store, StoreError
 
 
+def _progress_event(runtime, kind: str, payload: dict) -> None:
+    """Best-effort display telemetry; it cannot change the scientific result."""
+    try:
+        runtime.store.event(kind, payload)
+    except Exception:
+        # The ledger, task receipts and control result remain authoritative when
+        # a progress-only write is unavailable or its payload is malformed.
+        pass
+
+
+def _progress_phase(runtime) -> str:
+    try:
+        state = runtime.store.snapshot()["run"]["state"]
+        return "trial" if state in {"SMOKE", "HUMAN_GATE_SMOKE", "INPUT_READY"} else "batch"
+    except Exception:
+        return "trial"
+
+
+def _progress_scope(runtime, paper_uids) -> list[str]:
+    return sorted(str(uid) for uid in paper_uids)
+
+
+def _progress_budget(runtime) -> dict:
+    try:
+        return dict(runtime.budget.totals())
+    except Exception:
+        return {}
+
+
+def _progress_budget_delta(start: dict, end: dict) -> dict:
+    fields = ("calls", "known_tokens", "known_cost", "unpriced_requests")
+    delta = {}
+    for field in fields:
+        before, after = start.get(field), end.get(field)
+        delta[field] = after - before if isinstance(before, (int, float)) and isinstance(after, (int, float)) else None
+    return delta
+
+
+def _relative_artifacts(runtime, paths) -> list[dict]:
+    try:
+        root = runtime.run_dir.resolve()
+    except (OSError, TypeError, ValueError):
+        return []
+    result = []
+    for path in paths:
+        try:
+            target = Path(path).resolve()
+            if target.is_relative_to(root) and target.is_file():
+                result.append({"path": target.relative_to(root).as_posix(), "bytes": target.stat().st_size})
+        except (OSError, TypeError, ValueError):
+            continue
+    return result
+
+
 def begin(request: dict, config, runs_dir="runs", *, dry_run=False, run_id=None) -> Path:
     spec = ResearchSpecification.from_config(request, config)
     run = create_run(spec, runs_dir, run_id)
@@ -48,6 +102,10 @@ def _plan_tasks(store, spec, run_id):
 
 
 def _prepare(runtime):
+    scope = _progress_scope(runtime, [p["paper_uid"] for p in runtime.spec["papers"]])
+    phase = _progress_phase(runtime)
+    _progress_event(runtime, "stage_started", {"stage": "prepare", "round_index": None,
+                                                 "scope": scope, "phase": phase})
     if hasattr(runtime.config, 'PROJECT'):
         print('Preparing documents', file=sys.stderr, flush=True)
     root = runtime.run_dir
@@ -74,9 +132,20 @@ def _prepare(runtime):
                 # A damaged derived Markdown must be rebuilt, not accepted by the legacy file-exists check.
                 target.unlink(missing_ok=True)
                 conversions = {}
+                if runtime.spec['pdf']['backend'] == 'marker':
+                    _progress_event(runtime, "pdf_model_prepare_started", {
+                        "paper_uid": paper["paper_uid"], "backend": "marker", "phase": phase})
+                _progress_event(runtime, "pdf_conversion_started", {
+                    "paper_uid": paper["paper_uid"], "backend": runtime.spec['pdf']['backend'], "phase": phase})
                 preparation.convert_pdfs_to_markdown(pdf_dir, target.parent, pdf_config=runtime.spec['pdf'],
                                                      records=conversions, cache=pdf_cache)
                 converter = conversions[paper['paper_uid']]
+                _progress_event(runtime, "pdf_conversion_finished", {
+                    "paper_uid": paper["paper_uid"], "backend": converter.get("backend") if isinstance(converter, dict) else None,
+                    "path": str(target.relative_to(root).as_posix()), "phase": phase})
+                if runtime.spec['pdf']['backend'] == 'marker':
+                    _progress_event(runtime, "pdf_model_prepare_finished", {
+                        "paper_uid": paper["paper_uid"], "backend": "marker", "phase": phase})
             else:
                 shutil.copyfile(source, target)
             if not turnIntoPureText(target).strip():
@@ -84,6 +153,15 @@ def _prepare(runtime):
             save_json(metadata, dict(paper_uid=paper["paper_uid"], input_sha256=paper["sha256"],
                                      markdown_sha256=file_hash(target), converter=converter))
             runtime.completed(key, [target, metadata])
+    prepared_artifacts = _relative_artifacts(
+        runtime,
+        [p for uid in scope for p in (
+            root / "outputs" / "prepared" / f"{uid}.md",
+            root / "outputs" / "prepared" / f"{uid}.meta.json")])
+    _progress_event(runtime, "stage_finished", {"stage": "prepare", "round_index": None,
+                                                  "scope": scope, "phase": phase,
+                                                  "artifacts": prepared_artifacts,
+                                                  "paths": [item["path"] for item in prepared_artifacts]})
 
 
 def _scope_config(runtime, paper_uids, round_index):
@@ -121,12 +199,25 @@ def _execute_scope(runtime, paper_uids):
     for round_index in runtime.spec["rounds"]:
         config, scope_hash = _scope_config(runtime, paper_uids, round_index)
         cfg = config.DOMAINS[runtime.spec["domain"]]
+        phase = _progress_phase(runtime)
+        scope = _progress_scope(runtime, paper_uids)
+        finished_stages = []
+        finished_paths = []
+        finished_frozen_artifacts = {}
+        budget_start = _progress_budget(runtime)
+        _progress_event(runtime, "round_started", {
+            "round_index": round_index, "scope": scope, "phase": phase,
+            "budget_start": budget_start,
+        })
         for stage, field in fields.items():
             if hasattr(runtime.config, 'PROJECT'):
                 labels = dict(examiner='Extracting answers', composite='Combining candidates',
                               embeddings='Indexing evidence', cross='Cross-checking evidence', ensemble='Confirming consensus')
                 print(f'Round {round_index}: {labels[stage]} ({len(paper_uids)} papers)', file=sys.stderr, flush=True)
             key = runtime.key(stage, round_index=round_index, chunk=scope_hash)
+            _progress_event(runtime, "stage_started", {"stage": stage, "round_index": round_index,
+                                                         "scope": scope, "phase": phase,
+                                                         "task_id": key.task_id})
             with runtime.task_scope(key):
                 # Core semantic checks still run; paid task/response caches prevent extra calls.
                 run_pipeline._run(runtime.spec["domain"], stage, config, runtime=runtime)
@@ -146,10 +237,75 @@ def _execute_scope(runtime, paper_uids):
                 save_json(receipt, dict(task_id=key.task_id, stage=stage, scope=sorted(paper_uids), round_index=round_index,
                                         artifacts=[str(p.relative_to(checkpoint)) for p in artifacts]))
                 runtime.completed(key, artifacts + [receipt])
+            stage_artifacts = _relative_artifacts(runtime, artifacts + [receipt])
+            stage_paths = [item["path"] for item in _relative_artifacts(runtime, files)]
+            frozen_paths = [item["path"] for item in stage_artifacts]
+            _progress_event(runtime, "stage_finished", {"stage": stage, "round_index": round_index,
+                                                          "scope": scope, "phase": phase,
+                                                          "task_id": key.task_id, "artifacts": stage_artifacts,
+                                                          "paths": stage_paths,
+                                                          "frozen_artifacts": frozen_paths})
+            finished_stages.append(stage)
+            finished_paths.extend(stage_paths)
+            finished_frozen_artifacts[stage] = frozen_paths
             stop_after = getattr(runtime.config, 'PROJECT', {}).get('stage', 'all')
             if stage == stop_after and stage != 'ensemble':
                 runtime.store.set_state('PAUSED', f'Configured stop after {stage}; change project.stage to continue')
                 raise ControlStop(f'Finished requested stage: {stage}')
+        budget_end = _progress_budget(runtime)
+        budget_delta = _progress_budget_delta(budget_start, budget_end)
+        counters = _round_progress_counts(runtime, paper_uids, round_index)
+        _progress_event(runtime, "round_finished", {
+            "round_index": round_index, "scope": scope, "phase": phase,
+            "stages": finished_stages, "paths": finished_paths,
+            "frozen_artifacts": finished_frozen_artifacts,
+            "budget_start": budget_start, "budget_end": budget_end,
+            "budget_delta": budget_delta, "new_requests": budget_delta.get("calls"),
+            "new_usage": {key: budget_delta.get(key) for key in ("known_tokens", "known_cost", "unpriced_requests")},
+            "min_consensus_models": runtime.spec["run"].get("min_consensus_models"),
+            "counters": counters,
+        })
+
+
+def _round_progress_counts(runtime, paper_uids, round_index) -> dict:
+    """Return only ledger-backed leaf counts for a completed round summary."""
+    try:
+        scope = set(paper_uids)
+        tasks = runtime.store.tasks()
+        extraction = [t for t in tasks if t["stage"] == "examiner" and t["payload"].get("paper_uid") in scope
+                      and t["payload"].get("round_index") == round_index and t["payload"].get("question")]
+        cross = [t for t in tasks if t["stage"] == "cross" and t["payload"].get("paper_uid") in scope
+                 and t["payload"].get("round_index") == round_index and t["payload"].get("candidate")]
+        pairs = {(t["payload"].get("candidate"), t["payload"].get("verifier_model")) for t in cross}
+        def receipted(task):
+            return task["status"] == "succeeded" and bool(task.get("artifacts")) and all(
+                isinstance(item, dict) and item.get("path") and item.get("sha256")
+                for item in task["artifacts"])
+
+        leaf = [t for t in tasks if t["stage"] in {"examiner", "cross", "embeddings", "evidence_embedding"}
+                and t["payload"].get("paper_uid") in scope
+                and t["payload"].get("round_index") == round_index]
+        status_counts = {status: sum(t["status"] == status for t in leaf)
+                         for status in ("succeeded", "failed", "unresolved", "pending")}
+        task_by_id = {t["task_id"]: t for t in tasks}
+        scoped_cache_events = 0
+        for event in runtime.store._events():
+            if event["kind"] not in {"cache_hit", "response_reused"}:
+                continue
+            task = task_by_id.get(event["payload"].get("task_id"))
+            if task is not None and task in leaf:
+                scoped_cache_events += 1
+        return {"extraction": sum(receipted(t) for t in extraction),
+                "cross": sum(receipted(t) for t in cross) if cross else None,
+                "cross_candidates": len({(t["payload"].get("candidate"), t["payload"].get("source_model"))
+                                         for t in cross}) if cross else None,
+                "cross_verifier_pairs": len(pairs) if cross else None,
+                "success": status_counts["succeeded"], "failed": status_counts["failed"],
+                "unresolved": status_counts["unresolved"], "pending": status_counts["pending"],
+                "cache_reuse": scoped_cache_events, "scoped_cache_events": scoped_cache_events,
+                "tasks": status_counts}
+    except Exception:
+        return {"extraction": None, "cross": None, "cross_candidates": None, "cross_verifier_pairs": None}
 
 
 def _final_qc(runtime):

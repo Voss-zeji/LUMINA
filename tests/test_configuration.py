@@ -24,8 +24,8 @@ from lumina.study import run_study
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def study_files(root: Path, domain='generic') -> Path:
-    folder = root / '研究 配置'
+def study_files(root: Path, domain='generic', *, folder_name='研究 配置', omit_budget_pricing=False) -> Path:
+    folder = root / folder_name
     shutil.copytree(ROOT / 'configs' / domain, folder)
     path = folder / 'project.toml'
     text = path.read_text(encoding='utf-8')
@@ -38,6 +38,8 @@ def study_files(root: Path, domain='generic') -> Path:
                              max_input_tokens=20000, max_output_tokens=1000).items():
         text = text.replace(f'{field} = "REPLACE"', f'{field} = {value}')
     text = text.replace('REPLACE: provider, date and price source', 'synthetic fixture; not a real price')
+    if omit_budget_pricing:
+        text = text.split('\n[budget]\n', 1)[0] + '\n'
     path.write_text(text, encoding='utf-8')
     paper = folder / '文章 01.md'
     paper.write_text('Habitat is forest. Biomass is 2 kg.', encoding='utf-8')
@@ -53,6 +55,48 @@ class ConfigurationTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.path = study_files(self.root)
+
+    def _offline_cli(self, config_path: Path):
+        """Reuse the child-process transport harness for bounded offline workflows."""
+        hooks = config_path.parent / 'hooks'
+        hooks.mkdir()
+        mock = '''
+from types import SimpleNamespace
+from unittest.mock import Mock
+from lumina.agent import runtime
+import json
+def reply(**payload):
+    question = payload['messages'][-1]['content']
+    if question.startswith('Return the habitat'):
+        content = {'Habitat': dict(value='forest', evidence='Habitat is forest.', confidence_lv=95)}
+    elif question.startswith('Extract biomass'):
+        content = {'Biomass': dict(value=2, unit='kg', experimental='plot A', evidence='Biomass is 2 kg.', confidence_lv=95)}
+    else:
+        content = dict(existing_flag=1, direct_quote='Habitat is forest. Biomass is 2 kg.')
+    response = dict(choices=[dict(message=dict(content=json.dumps(content)),finish_reason='stop')],usage=dict(prompt_tokens=12,completion_tokens=5,total_tokens=17))
+    return SimpleNamespace(model_dump=lambda **_: response)
+client=Mock()
+client.chat.completions.create.side_effect=reply
+runtime.OpenAI=lambda **_:client
+embedding=Mock()
+embedding.json.return_value=dict(data=[dict(embedding=[1.,0.])],usage=dict(prompt_tokens=3,total_tokens=3))
+runtime.requests.post=lambda *a,**k:embedding
+runtime.RunContext.sleep=lambda *a,**k:None
+'''
+        (hooks / 'sitecustomize.py').write_text(
+            (ROOT / 'tests' / 'sitecustomize.py').read_text() + mock, encoding='utf-8')
+        env = dict(os.environ, LUMINA_TEST_OFFLINE='1', PYTHONIOENCODING='utf-8',
+                   PYTHONPATH=os.pathsep.join([str(hooks), str(ROOT)]))
+
+        def cli(args, expected):
+            child = subprocess.run([sys.executable, str(ROOT / 'run_pipeline.py'), *args],
+                                   cwd=config_path.parent, env=env, stdin=subprocess.DEVNULL,
+                                   capture_output=True, text=True, encoding='utf-8', timeout=45)
+            self.assertEqual(child.returncode, expected, child.stdout + child.stderr)
+            self.assertNotIn('SECRET-DO-NOT-PERSIST', child.stdout + child.stderr)
+            return child.stdout
+
+        return cli
 
     def test_relative_unicode_inputs_isolation_and_no_network_check(self):
         cfg = load_config(str(self.path))
@@ -88,6 +132,19 @@ class ConfigurationTests(unittest.TestCase):
         (self.path.parent / 'papers.txt').write_text('missing.md\n', encoding='utf-8')
         with self.assertRaises(FileNotFoundError):
             load_config(str(self.path))
+
+    def test_malformed_budget_and_pricing_tables_are_not_coerced_to_empty(self):
+        original = self.path.read_text(encoding='utf-8')
+        prefix = original.split('\n[budget]\n', 1)[0]
+        for field in ('budget', 'pricing'):
+            for value in ('[]', 'false'):
+                with self.subTest(field=field, value=value):
+                    invalid = prefix.replace('\n[project]\n',
+                                             f'\n{field} = {value}\n\n[project]\n', 1)
+                    self.path.write_text(invalid, encoding='utf-8')
+                    with self.assertRaisesRegex(ValueError, field):
+                        load_config(str(self.path))
+        self.path.write_text(original, encoding='utf-8')
 
     def test_question_validation_and_reversed_field_types(self):
         definition = prompts.definition('aqua')
@@ -138,41 +195,7 @@ class ConfigurationTests(unittest.TestCase):
 
     def test_generic_toml_through_real_worker_then_resume_is_offline(self):
         # Test-only transport injection in child interpreters; production has no mock switch.
-        hooks = self.root / 'hooks'
-        hooks.mkdir()
-        mock = '''
-from types import SimpleNamespace
-from unittest.mock import Mock
-from lumina.agent import runtime
-import json
-def reply(**payload):
-    question = payload['messages'][-1]['content']
-    if question.startswith('Return the habitat'):
-        content = {'Habitat': dict(value='forest', evidence='Habitat is forest.', confidence_lv=95)}
-    elif question.startswith('Extract biomass'):
-        content = {'Biomass': dict(value=2, unit='kg', experimental='plot A', evidence='Biomass is 2 kg.', confidence_lv=95)}
-    else:
-        content = dict(existing_flag=1, direct_quote='Habitat is forest. Biomass is 2 kg.')
-    response = dict(choices=[dict(message=dict(content=json.dumps(content)),finish_reason='stop')],usage=dict(prompt_tokens=12,completion_tokens=5,total_tokens=17))
-    return SimpleNamespace(model_dump=lambda **_: response)
-client=Mock()
-client.chat.completions.create.side_effect=reply
-runtime.OpenAI=lambda **_:client
-embedding=Mock()
-embedding.json.return_value=dict(data=[dict(embedding=[1.,0.])],usage=dict(prompt_tokens=3,total_tokens=3))
-runtime.requests.post=lambda *a,**k:embedding
-runtime.RunContext.sleep=lambda *a,**k:None
-'''
-        (hooks / 'sitecustomize.py').write_text((ROOT / 'tests' / 'sitecustomize.py').read_text() + mock, encoding='utf-8')
-        env = dict(os.environ, LUMINA_TEST_OFFLINE='1', PYTHONIOENCODING='utf-8', PYTHONPATH=os.pathsep.join([str(hooks), str(ROOT)]))
-
-        def cli(args, expected):
-            child = subprocess.run([sys.executable, str(ROOT / 'run_pipeline.py'), *args], cwd=self.root,
-                                   env=env, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding='utf-8', timeout=45)
-            self.assertEqual(child.returncode, expected, child.stdout + child.stderr)
-            self.assertNotIn('SECRET-DO-NOT-PERSIST', child.stdout + child.stderr)
-            return child.stdout
-
+        cli = self._offline_cli(self.path)
         args = ['--config', str(self.path)]
         cli([*args, '--check'], 0)
         self.assertFalse((self.root / 'runs').exists())
@@ -191,3 +214,41 @@ runtime.RunContext.sleep=lambda *a,**k:None
         report = json.loads((run / 'reports' / 'final_report.json').read_text(encoding='utf-8'))
         self.assertTrue(report['final_qc']['passed'])
         self.assertNotIn('SECRET-DO-NOT-PERSIST', (run / 'manifest.json').read_text(encoding='utf-8'))
+
+    def test_omitted_budget_pricing_full_trial_batch_resume_is_offline(self):
+        path = study_files(self.root, folder_name='optional 配置', omit_budget_pricing=True)
+        path.write_text(path.read_text(encoding='utf-8').replace('rounds = [1]', 'rounds = [1, 2]'), encoding='utf-8')
+        (path.parent / '文章 02.md').write_text('Habitat is forest. Biomass is 2 kg. Second study.', encoding='utf-8')
+        with (path.parent / 'papers.txt').open('a', encoding='utf-8') as manifest:
+            manifest.write('文章 02.md\n')
+        text = path.read_text(encoding='utf-8')
+        self.assertNotIn('[budget]', text)
+        self.assertNotIn('[pricing.', text)
+        cli = self._offline_cli(path)
+        args = ['--config', str(path)]
+        cli([*args, '--check'], 0)
+        cli(args, 2)
+        run = path.parent.parent / 'runs' / 'my-study-001'
+        from lumina.agent.store import Store
+        with Store(run) as store:
+            smoke = next(g for g in store.gates() if g['kind'] == 'smoke')
+            self.assertEqual(sum(task['status'] == 'succeeded' for task in store.tasks('examiner')
+                                 if task['payload'].get('paper_uid')), 8)
+        cli(['approve', '--runs-dir', str(run.parent), '--run-id', run.name,
+             '--gate-id', smoke['gate_id'], '--reason', 'Reviewed unpriced offline trial'], 0)
+        cli(args, 0)
+        with Store(run) as store:
+            calls = store._conn.execute('SELECT count(*) FROM attempts').fetchone()[0]
+            stages = {task['stage'] for task in store.tasks()}
+            state = store.snapshot()['run']['state']
+        self.assertEqual(state, 'DONE')
+        self.assertTrue({'prepare', 'examiner', 'composite', 'embeddings', 'cross', 'ensemble'} <= stages)
+        cli(args, 0)
+        with Store(run) as store:
+            self.assertEqual(store._conn.execute('SELECT count(*) FROM attempts').fetchone()[0], calls)
+        report = json.loads((run / 'reports' / 'final_report.json').read_text(encoding='utf-8'))
+        self.assertEqual(report['model_count'], 2)
+        self.assertGreater(report['budget']['unpriced_requests'], 0)
+        self.assertGreater(report['budget']['known_tokens'], 0)
+        self.assertFalse(report['budget']['cost_complete'])
+        self.assertIsNone(report['budget']['total_cost'])

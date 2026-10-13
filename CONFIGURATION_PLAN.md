@@ -102,3 +102,68 @@ via `PIP_INDEX_URL`, without modifying global pip settings.
 The independent review confirmed UID-based PDF provenance, fallback routing,
 empty-page rejection, configuration fingerprints, and isolated pip targeting.
 Its remaining first-use model-download timing note is now in both READMEs.
+
+## Interactive terminal follow-up (approved 2026-10-13)
+
+Base main: `5a5e591`. Branch: `feat/interactive-cli`.
+
+One Python 3.12 launcher prepares/reuses the selected venv, shows an ASCII welcome,
+and guides study setup in Chinese/English (Chinese default). New/edit/resume are
+separate actions. Stage settings are completed before execution and saved in the
+existing four study files. PDF directory selection, exclusions, prompt preview and
+editor, displayed defaults, back navigation and draft save are required.
+
+Budgets may be omitted independently (no corresponding total cap); prices may be
+unknown, never zero by implication. Default verification threshold is 1 and consensus
+is a strict model majority for new studies; existing values remain unchanged.
+Requests retain finite timeout/output bounds, receipted accounting, a three-attempt
+ceiling, self-exclusion and explicit trial-to-batch approval. No native-PDF API path.
+
+| Goal | Acceptance | Evidence |
+|---|---|---|
+| I1 Launcher and wizard | Reuse install.py; healthy environments do not reinstall; bilingual grouped setup, defaults, draft/edit/resume | Passed focused tests and actual Windows terminal demonstration; Marker/fallback profile verified |
+| I2 Optional budgets and quotes | None-safe caps/costs, model request bounds independent of prices, finite old caps preserved | Passed optional/legacy budget, quote, and two-model/two-paper/two-round trial/batch/resume tests |
+| I3 Runtime feedback | Honest phase/round counts, waits, cached requests, round artifacts, no JSON protocol or deadline regression | Passed read-only progress, slow observer, large child receipt, repeated real runtime wait and round artifact tests |
+| I4 Full logging | Redacted setup/input provenance/request/response/use/error/output records; linked startup log | Passed nested secret redaction, private draft and setup-log linking tests |
+| I5 Delivery | Offline Windows/Ubuntu checks, terminal demonstration, bilingual documentation and review | Local 482 tests passed (204.595 s); final wait fix passed 28 related tests; GitHub cross-platform checks pending |
+
+Generic quotes are public JSON URLs or JSON files with a `quotes` array. Each row
+contains `base_url`, `model`, `currency`, `input_per_million`, `output_per_million`,
+and `as_of`. Only exact endpoint/model matches are eligible; imports require preview
+and confirmation. Capture source/fetch time; do not convert currencies or infer proxy
+prices from an upstream vendor. Missing/unrecognized prices can remain unknown. A
+money cap requires complete, comparable pricing.
+
+New model fields `max_input_tokens` (optional) and `max_output_tokens` (default 4096,
+embedding default 0) define request limits independently of prices. Explicit legacy
+pricing bounds remain authoritative for legacy configurations. Unset input limits use
+a conservative byte-based request reservation; unset total limits are represented as
+null in the resolved snapshot, never Infinity. New study files may omit budget/rate
+fields; legacy full configurations remain accepted.
+
+Implementation ownership: parent owns launcher, wizard, quote import, install/deps,
+documentation and integration; budget worker owns budget/contracts/runtime/config
+and its tests; progress worker owns controller/worker/report/progress and its tests.
+Workers coordinate shared interfaces rather than editing each other's files.
+
+
+Current integration evidence (2026-10-13):
+- 47 focused UI/install/quote tests passed, including silent-install heartbeat,
+  Ctrl-C child cleanup, hidden keys, private draft exit, TOML round-trip and quote rejection.
+- Actual Windows PTY used `start.py --venv .venv --lang en --config <synthetic-study>`:
+  healthy venv skipped pip installation; ASCII welcome and grouped study defaults
+  appeared; draft exit saved to `runs/_setup/`. A second launch without `--lang`
+  remembered English. No real API call or OCR weight download occurred.
+- Added end-to-end coverage for omitted caps/prices and retained legacy token bounds.
+- Local full regression passed. GitHub Ubuntu/Windows checks are pending on the submitted revision.
+
+Independent review fixes: structured auth-field redaction, Marker-aware startup health
+with persistent explicit fallback, malformed pricing rejection, and real wait-event
+producer/renderer pairing. Legacy quotes may retain their common implicit monetary
+unit for compatibility; explicit mixed currencies are rejected, and imports require
+currency plus endpoint binding. Known rates still require a price basis.
+
+A second actual Windows PTY demonstration used the custom `pdf-install-smoke` venv
+with Marker installed and Chinese UI. Imports passed, installation was skipped,
+ASCII/group defaults appeared and draft exit succeeded. No OCR weights or real
+research requests were started.

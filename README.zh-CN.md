@@ -99,6 +99,28 @@ flowchart LR
 ```bash
 git clone https://github.com/Voss-zeji/LUMINA.git
 cd LUMINA
+python start.py --venv .venv
+```
+
+`start.py` 首次创建或检查指定的 Python 3.12 venv，复用安装器安装默认依赖，然后显示 ASCII 欢迎页。健康环境后续启动会跳过安装，不自动升级包；无需先激活环境。路径可改为 `--venv "D:/envs/lumina"`。不传 `--venv` 时使用当前已激活环境，否则使用仓库的 `.venv`。
+
+欢迎页提供“新建研究任务／加载配置并修改／继续已有运行”。默认中文，也可用 `--lang en`；语言和最近配置位置会保存在本地。已有配置可直接指定：
+
+```bash
+python start.py --venv .venv --config configs/my-study/project.toml
+```
+
+向导依次确认研究任务、PDF 清单与抽取模型、提示词、embedding、核验和共识阈值、轮次及费用。关键项逐项输入，高级项显示当前值后可展开；回车保留默认值，可选价格和预算输入 `-` 清空。PDF 扫描支持子目录和排除文件；提示词可预览、导入或打开编辑器。密钥隐藏输入。
+
+每组可返回修改或保存草稿退出。最后选择只保存、无模型调用检查或试跑；试跑结束仍需明确确认才执行整批。续跑直接使用冻结条件，修改科研条件需新运行标识。新任务默认 1 轮、试跑 1 篇，核验阈值 1，共识阈值为模型数的严格多数。
+
+调用、token、金额、总时长上限可分别留空；未知价格不会按零计算。金额上限需要完整、同币种的报价，否则校验不通过。价格导入与高级配置见[配置指南](CONFIGURATION.md#optional-budgets-and-quotes--可选预算与报价)。新请求默认超时 120 秒、输出上限 4,096 tokens，旧配置的明确上限继续有效。
+
+运行时显示阶段、轮次、等待、完成／失败／缓存情况及每轮结果路径，多个阈值分别统计。安装和向导日志保存在 Git 忽略的 `runs/_setup/`，运行后关联到对应的 `reports/setup/`；密钥脱敏。非交互环境不进入向导，请使用下面的原有命令。
+
+### 手动安装和配置（继续支持）
+
+```bash
 python install.py --venv .venv
 ```
 
@@ -136,12 +158,12 @@ cp configs/my-study/secrets.example.toml configs/my-study/secrets.local.toml
 
 | 文件 | 填写内容 |
 |---|---|
-| `project.toml` | 模型及接口、研究名称、轮次、检索参数、试跑数量、输出位置、模型价格与四项预算 |
+| `project.toml` | 模型及接口、研究名称、轮次、检索参数、试跑数量、输出位置、可选模型价格与四项预算 |
 | `papers.txt` | 每行一篇原始 PDF 的路径；已有 Markdown 仍可直接使用 |
 | `questions.toml` | 全部提示词、问题列表、文本／数值类型、字段与单位要求 |
 | `secrets.local.toml` | API 密钥；此文件被 Git 忽略 |
 
-所有相对路径以配置目录为基准。示例中的占位内容必须替换为真实设置；模型价格不能猜测。配置读取使用 Python 标准库 `tomllib`，无需新增配置解析依赖。
+所有相对路径以配置目录为基准。示例中的占位内容必须替换为真实设置；模型价格不能猜测。运行配置读取使用标准库 `tomllib`；向导写回使用 TOML Kit 保留注释。未知价格可省略对应资费项。
 
 PDF 转换设置也在 `project.toml` 中：
 
@@ -175,7 +197,7 @@ python run_pipeline.py --config configs/my-study/project.toml
 
 相同 `project.run_id` 对应同一次运行。模型、文章、提示词、问题规则、科研参数或预算改变时，应更换运行标识；程序拒绝混用旧结果。`project.stage` 是本次执行的停止位置，可以调整。退出码 0 表示完成或检查成功，2 表示暂停／需要确认，1 表示错误。
 
-`max_runtime` 包含从运行创建起的等待与审核时间。结果未知的模型请求保留费用占用和回执，须核对后处理，不盲目重试。详细记录见输出目录的 `reports/`。
+设置 `max_runtime` 时，它包含从运行创建起的等待与审核时间；省略表示不设总时长上限。结果未知的模型请求保留费用占用和回执，须核对后处理，不盲目重试。详细记录见输出目录的 `reports/`。
 
 旧 Python 配置入口仍可用，迁移说明见 [配置指南](CONFIGURATION.md)。旧运行目录不会自动改写；规格不兼容时使用原版本恢复或新建运行。需要高级诊断、独立参考集评价或手工请求核对时，见 [高级运行指南](AGENT_GUIDE.md)。
 

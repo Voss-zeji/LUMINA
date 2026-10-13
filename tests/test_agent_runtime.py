@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from dataclasses import replace
@@ -47,6 +48,24 @@ class RuntimeTests(unittest.TestCase):
         client = Mock()
         client.chat.completions.create.return_value = SimpleNamespace(model_dump=lambda **_: envelope)
         return client
+
+    def test_repeated_runtime_wait_events_render_until_each_wait_finishes(self):
+        from lumina.progress import ProgressMonitor, format_progress
+        monitor = ProgressMonitor(self.run)
+        waits = []
+        actual_sleep = time.sleep
+        def observe(seconds):
+            snapshot = monitor.snapshot()
+            waits.append(snapshot['waiting'])
+            self.assertIn('rate wait', format_progress(snapshot, language='en'))
+            actual_sleep(seconds)
+        with self.runtime.task_scope(self.key), patch('lumina.agent.runtime.time.sleep', side_effect=observe):
+            self.runtime.sleep(.01)
+            self.assertIsNone(monitor.snapshot()['waiting'])
+            self.runtime.sleep(.01)
+        self.assertGreaterEqual(len(waits), 2)
+        self.assertTrue(all(w['kind'] == 'rate' and w['model'] == self.model['model'] for w in waits))
+        self.assertIsNone(monitor.snapshot()['waiting'])
 
     def test_disables_hidden_retries_and_replays_response_after_output_loss(self):
         client = self.client()
